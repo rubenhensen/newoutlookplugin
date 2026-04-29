@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "baseUrl": ".",
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "module": "esnext",
+    "noEmitOnError": true,
+    "outDir": "lib",
+    "sourceMap": true,
+    "strict": true,
+    "target": "es2020",
+    "lib": ["es2022", "dom"],
+    "types": ["office-js", "office-runtime"]
+  },
+  "exclude": ["node_modules", "dist", "lib", "lib-amd"]
+}

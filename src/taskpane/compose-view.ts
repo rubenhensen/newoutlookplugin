@@ -1,0 +1,361 @@
+// Compose-mode taskpane view: encryption toggle, policy editor entry points,
+// and the "Encrypt & Send" action that runs the SDK + Yivi flow inline.
+
+import { PostGuard, buildMime } from "@e4a/pg-js";
+import {
+  getRecipients,
+  getSubject,
+  setSubject,
+  getBody,
+  setBody,
+  getAttachmentsCompose,
+  readComposeAttachmentBytes,
+  removeAttachment,
+  addBase64Attachment,
+  getSenderEmail,
+  showNotification,
+} from "../lib/office-helpers";
+import { toBase64 } from "../lib/encoding";
+import { EMAIL_ATTRIBUTE_TYPE } from "../lib/attributes";
+import {
+  Policy,
+  AttributeRequest,
+  MimeAttachment,
+} from "../lib/types";
+import {
+  PKG_URL,
+  CRYPTIFY_URL,
+  POSTGUARD_WEBSITE_URL,
+  clientHeaders,
+} from "../lib/pkg-client";
+import { POSTGUARD_ENCRYPTED_FILENAME } from "../lib/mime";
+import { t } from "../lib/i18n";
+import { openPolicyEditor } from "./policy-editor";
+import { showView, setStatus, showError } from "./taskpane";
+
+const ADDIN_VERSION = "0.1.0";
+
+interface ComposeState {
+  encrypt: boolean;
+  policy: Policy;
+  signAttributes: AttributeRequest[];
+  recipients: { to: string[]; cc: string[]; bcc: string[] };
+  busy: boolean;
+}
+
+const state: ComposeState = {
+  encrypt: false,
+  policy: {},
+  signAttributes: [],
+  recipients: { to: [], cc: [], bcc: [] },
+  busy: false,
+};
+
+export async function mountComposeView(): Promise<void> {
+  showView("compose");
+
+  const toggle = byId<HTMLInputElement>("pg-toggle-encrypt");
+  const toggleLabel = byId<HTMLElement>("pg-toggle-label");
+  const bccWarning = byId<HTMLElement>("pg-bcc-warning");
+  const btnManage = byId<HTMLButtonElement>("pg-btn-manage");
+  const btnSign = byId<HTMLButtonElement>("pg-btn-sign");
+  const btnEncryptSend = byId<HTMLButtonElement>("pg-btn-encrypt-send");
+
+  btnManage.textContent = t("manageAccess");
+  btnSign.textContent = t("sign");
+  btnEncryptSend.textContent = t("encryptAndSend");
+
+  toggle.addEventListener("change", () => {
+    state.encrypt = toggle.checked;
+    renderToggleUI();
+  });
+
+  btnManage.addEventListener("click", () => {
+    void openManageAccess();
+  });
+
+  btnSign.addEventListener("click", () => {
+    void openSign();
+  });
+
+  btnEncryptSend.addEventListener("click", () => {
+    if (state.busy) return;
+    void encryptAndPrepareSend();
+  });
+
+  await refreshRecipients();
+  renderToggleUI();
+
+  // Re-pull recipients each time the user comes back to the taskpane.
+  // Outlook does not have a "recipient changed" event in compose, so we
+  // refresh on toggle interaction and on every Encrypt & Send press.
+  bccWarning.hidden = state.recipients.bcc.length === 0 || !state.encrypt;
+}
+
+function renderToggleUI(): void {
+  const toggle = byId<HTMLInputElement>("pg-toggle-encrypt");
+  const toggleLabel = byId<HTMLElement>("pg-toggle-label");
+  const btnManage = byId<HTMLButtonElement>("pg-btn-manage");
+  const btnSign = byId<HTMLButtonElement>("pg-btn-sign");
+  const btnEncryptSend = byId<HTMLButtonElement>("pg-btn-encrypt-send");
+  const bccWarning = byId<HTMLElement>("pg-bcc-warning");
+
+  toggle.checked = state.encrypt;
+  toggleLabel.textContent = state.encrypt
+    ? t("composeSwitchBarEnabled")
+    : t("composeSwitchBarDisabled");
+
+  const hasRecipients =
+    state.recipients.to.length + state.recipients.cc.length > 0;
+  const bccPresent = state.recipients.bcc.length > 0;
+
+  btnManage.disabled = !state.encrypt || !hasRecipients;
+  btnSign.disabled = !state.encrypt;
+  btnEncryptSend.disabled = !state.encrypt || !hasRecipients || bccPresent;
+
+  if (bccPresent && state.encrypt) {
+    bccWarning.hidden = false;
+    bccWarning.textContent = t("composeBccWarning");
+  } else {
+    bccWarning.hidden = true;
+  }
+}
+
+async function refreshRecipients(): Promise<void> {
+  const [toR, ccR, bccR] = await Promise.all([
+    getRecipients("to"),
+    getRecipients("cc"),
+    getRecipients("bcc"),
+  ]);
+  state.recipients.to = toR.map((r) => r.emailAddress.toLowerCase());
+  state.recipients.cc = ccR.map((r) => r.emailAddress.toLowerCase());
+  state.recipients.bcc = bccR.map((r) => r.emailAddress.toLowerCase());
+
+  // Drop policy entries for emails no longer present.
+  const all = new Set([...state.recipients.to, ...state.recipients.cc]);
+  for (const k of Object.keys(state.policy)) {
+    if (!all.has(k)) delete state.policy[k];
+  }
+  // Seed default (email-only) policy for new recipients.
+  for (const email of all) {
+    if (!state.policy[email]) {
+      state.policy[email] = [{ t: EMAIL_ATTRIBUTE_TYPE, v: email }];
+    }
+  }
+}
+
+async function openManageAccess(): Promise<void> {
+  await refreshRecipients();
+  openPolicyEditor({
+    initialPolicy: state.policy,
+    sign: false,
+    onSave: (next) => {
+      state.policy = next;
+      // Ensure email is always populated even if the user managed to clear it.
+      for (const [email, attrs] of Object.entries(state.policy)) {
+        if (!attrs.some((a) => a.t === EMAIL_ATTRIBUTE_TYPE)) {
+          attrs.unshift({ t: EMAIL_ATTRIBUTE_TYPE, v: email });
+        }
+      }
+      showView("compose");
+      renderToggleUI();
+    },
+    onCancel: () => {
+      showView("compose");
+      renderToggleUI();
+    },
+  });
+}
+
+async function openSign(): Promise<void> {
+  const senderEmail = getSenderEmail();
+  // Sign editor is conceptually a single-recipient policy where the
+  // "recipient" is the sender's own address.
+  const signPolicy: Policy = {
+    [senderEmail]:
+      state.signAttributes.length > 0
+        ? state.signAttributes
+        : [{ t: EMAIL_ATTRIBUTE_TYPE, v: senderEmail }],
+  };
+  openPolicyEditor({
+    initialPolicy: signPolicy,
+    sign: true,
+    onSave: (next) => {
+      const attrs = next[senderEmail] ?? [];
+      state.signAttributes = attrs;
+      showView("compose");
+      renderToggleUI();
+    },
+    onCancel: () => {
+      showView("compose");
+      renderToggleUI();
+    },
+  });
+}
+
+async function encryptAndPrepareSend(): Promise<void> {
+  state.busy = true;
+  setStatus(t("encrypting"));
+  try {
+    await refreshRecipients();
+    if (state.recipients.bcc.length > 0) {
+      throw new Error(t("composeBccWarning"));
+    }
+    if (state.recipients.to.length + state.recipients.cc.length === 0) {
+      throw new Error(t("composeNoRecipients"));
+    }
+
+    const senderEmail = getSenderEmail();
+    if (!senderEmail) throw new Error(t("composeNoSenderEmail"));
+
+    const subject = await getSubject();
+    const html = await getBody(Office.CoercionType.Html);
+    const attachments = await collectComposeAttachments();
+
+    const mime = await buildMime({
+      from: senderEmail,
+      to: state.recipients.to,
+      cc: state.recipients.cc,
+      subject,
+      htmlBody: html,
+      date: new Date(),
+      attachments: attachments.map((a) => ({
+        name: a.name,
+        type: a.type,
+        data: a.data,
+      })),
+    } as never) as Uint8Array;
+
+    showView("yivi");
+    const yiviTitle = byId<HTMLElement>("pg-yivi-title");
+    const yiviSubtitle = byId<HTMLElement>("pg-yivi-subtitle");
+    yiviTitle.textContent = t("displayMessageTitleSign");
+    yiviSubtitle.textContent = t("displayMessageQrPrefix");
+    // Reset the yivi host so the SDK can mount fresh.
+    document.getElementById("yivi-web-form")!.innerHTML = "";
+
+    const pg = new PostGuard({
+      pkgUrl: PKG_URL,
+      cryptifyUrl: CRYPTIFY_URL,
+      headers: clientHeaders(ADDIN_VERSION),
+    } as never);
+
+    const recipients = buildPgRecipients(pg);
+
+    const sealed = pg.encrypt({
+      sign: pg.sign.yivi({
+        element: "#yivi-web-form",
+        senderEmail,
+        attributes: state.signAttributes.length ? state.signAttributes : undefined,
+      } as never),
+      recipients,
+      data: mime,
+    } as never);
+
+    const envelope = await pg.email.createEnvelope({
+      sealed,
+      from: senderEmail,
+      websiteUrl: POSTGUARD_WEBSITE_URL,
+      senderAttributes: state.signAttributes.map((a) => a.v),
+    } as never);
+
+    const attBytes = new Uint8Array(await envelope.attachment.arrayBuffer());
+    const attBase64 = toBase64(attBytes);
+
+    await setSubject(envelope.subject);
+    await setBody(envelope.htmlBody);
+
+    // Remove the now-redundant plaintext attachments. They are bundled
+    // inside the encrypted envelope.
+    for (const a of attachments) {
+      try {
+        await removeAttachment(a.id);
+      } catch (_e) {
+        // Continue best-effort.
+      }
+    }
+
+    await addBase64Attachment(POSTGUARD_ENCRYPTED_FILENAME, attBase64);
+
+    showView("compose");
+    setStatus("Encrypted. Click Send to deliver the message.");
+    await showNotification("postguard-encrypted", "PostGuard: message encrypted, click Send.", {
+      persistent: true,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : t("encryptionError");
+    setStatus(msg, "error");
+    showView("compose");
+    showError(msg);
+  } finally {
+    state.busy = false;
+  }
+}
+
+function buildPgRecipients(pg: PostGuard): unknown[] {
+  const all = [...state.recipients.to, ...state.recipients.cc];
+  return all.map((email) => {
+    const builder = (pg as never as { recipient: { email: (e: string) => RecipientBuilder } })
+      .recipient.email(email);
+    const policy = state.policy[email];
+    if (policy) {
+      for (const attr of policy) {
+        if (attr.t !== EMAIL_ATTRIBUTE_TYPE) {
+          builder.extraAttribute(attr.t, attr.v.toLowerCase());
+        }
+      }
+    }
+    return builder;
+  });
+}
+
+interface RecipientBuilder {
+  extraAttribute(t: string, v: string): RecipientBuilder;
+}
+
+async function collectComposeAttachments(): Promise<
+  (MimeAttachment & { id: string })[]
+> {
+  const list = await getAttachmentsCompose();
+  const out: (MimeAttachment & { id: string })[] = [];
+  for (const a of list) {
+    // Skip cloud attachments — we cannot read their bytes via Office.js.
+    if (a.attachmentType === Office.MailboxEnums.AttachmentType.Cloud) continue;
+    try {
+      const data = await readComposeAttachmentBytes(a.id);
+      out.push({
+        id: a.id,
+        name: a.name,
+        type: guessContentType(a.name),
+        data,
+      });
+    } catch (_e) {
+      // Swallow individual attachment read failures.
+    }
+  }
+  return out;
+}
+
+function byId<T extends HTMLElement>(id: string): T {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`Missing element #${id}`);
+  return el as T;
+}
+
+function guessContentType(name: string): string {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  const map: Record<string, string> = {
+    pdf: "application/pdf",
+    txt: "text/plain",
+    csv: "text/csv",
+    html: "text/html",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    zip: "application/zip",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  };
+  return map[ext] ?? "application/octet-stream";
+}
