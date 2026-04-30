@@ -12,6 +12,4 @@ export const SUPPORTED_ATTRIBUTES: AttributeDescriptor[] = [
   { type: "pbdf.sidn-pbdf.mobilenumber.mobilenumber", defaultLabel: "Mobile number" },
   { type: "pbdf.gemeente.personalData.surname", defaultLabel: "Surname" },
   { type: "pbdf.gemeente.personalData.dateofbirth", defaultLabel: "Date of birth" },
-  { type: "pbdf.nuts.agb.agbcode", defaultLabel: "AGB code" },
-  { type: "pbdf.pbdf.surfnet-2.id", defaultLabel: "Surf EduID" },
 ];

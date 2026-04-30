@@ -39,9 +39,13 @@ import { showView, setStatus, showError } from "./taskpane";
 
 const ADDIN_VERSION = "0.1.0";
 
-// Internet-header key shared with the OnMessageSend handler. Custom header
+// Internet-header keys shared with the OnMessageSend handler. Custom header
 // names must be x-prefixed.
 const HEADER_ENCRYPT_ON_SEND = "x-pg-encrypt-on-send";
+// Comma-joined sorted list of lowercase To+Cc emails captured at encrypt
+// time. The handler compares this against the message's current recipients
+// to refuse sending an encrypted blob to anyone who wasn't in the policy.
+const HEADER_ENCRYPTED_RECIPIENTS = "x-pg-encrypted-recipients";
 
 async function persistEncryptOnSend(value: boolean): Promise<void> {
   try {
@@ -63,12 +67,51 @@ async function persistEncryptOnSend(value: boolean): Promise<void> {
   }
 }
 
+async function persistEncryptedRecipients(value: string | null): Promise<void> {
+  try {
+    await saveItem();
+    if (value !== null) {
+      await setItemHeaders({ [HEADER_ENCRYPTED_RECIPIENTS]: value });
+    } else {
+      await removeItemHeaders([HEADER_ENCRYPTED_RECIPIENTS]);
+    }
+    await saveItem();
+  } catch (_e) {
+    // Best-effort. The handler also re-derives the current recipient list
+    // and compares; a missing or stale header just biases toward blocking.
+  }
+}
+
+function recipientsKey(): string {
+  return [...state.recipients.to, ...state.recipients.cc]
+    .map((e) => e.toLowerCase().trim())
+    .filter(Boolean)
+    .sort()
+    .join(",");
+}
+
 interface ComposeState {
   encrypt: boolean;
   policy: Policy;
   signAttributes: AttributeRequest[];
   recipients: { to: string[]; cc: string[]; bcc: string[] };
   busy: boolean;
+  // Set after a successful encrypt run; used to label the action button
+  // "Re-encrypt" and disable it until something policy-relevant changes.
+  encrypted: boolean;
+  // Captured before encryption so a "Re-encrypt" can restore the draft
+  // body and remove the previous encrypted attachment, then re-run from
+  // scratch instead of double-encrypting the envelope.
+  preEncryptBody: string | null;
+  encryptedAttachmentId: string | null;
+  // Hash of the policy-relevant inputs at last successful encryption.
+  // Compared against `relevantStateString()` to decide whether the user
+  // changed something since.
+  encryptedSnapshot: string | null;
+  // Last value we wrote to the x-pg-encrypted-recipients header so we only
+  // re-write when it actually needs to change (renderToggleUI runs many
+  // times between events). null means the header is currently cleared.
+  encryptedRecipientsHeader: string | null;
 }
 
 const state: ComposeState = {
@@ -77,7 +120,24 @@ const state: ComposeState = {
   signAttributes: [],
   recipients: { to: [], cc: [], bcc: [] },
   busy: false,
+  encrypted: false,
+  preEncryptBody: null,
+  encryptedAttachmentId: null,
+  encryptedSnapshot: null,
+  encryptedRecipientsHeader: null,
 };
+
+// Stringified form of everything that affects the encrypted output. If this
+// changes after a successful encrypt, the message no longer matches the
+// current intent and Re-encrypt should be enabled.
+function relevantStateString(): string {
+  return JSON.stringify({
+    to: [...state.recipients.to].sort(),
+    cc: [...state.recipients.cc].sort(),
+    policy: state.policy,
+    sign: state.signAttributes,
+  });
+}
 
 export async function mountComposeView(): Promise<void> {
   showView("compose");
@@ -110,6 +170,19 @@ export async function mountComposeView(): Promise<void> {
   btnEncryptSend.addEventListener("click", () => {
     if (state.busy) return;
     void encryptAndPrepareSend();
+  });
+
+  // Escape hatch out of the Yivi view. yivi-web shows a "cancelled" red X
+  // inline when the user declines in the app and pg-js's promise behavior
+  // around cancellation isn't fully reliable, so the user can stall here
+  // without ever seeing our error view. This Cancel button always works.
+  const btnYiviCancel = byId<HTMLButtonElement>("pg-btn-yivi-cancel");
+  btnYiviCancel.textContent = t("policyEditorCancel");
+  btnYiviCancel.addEventListener("click", () => {
+    document.getElementById("yivi-web-form")!.innerHTML = "";
+    state.busy = false;
+    setStatus("");
+    showView("compose");
   });
 
   // If the user previously toggled encryption on for this draft (e.g. they
@@ -155,7 +228,34 @@ function renderToggleUI(): void {
 
   btnManage.disabled = !state.encrypt || !hasRecipients;
   btnSign.disabled = !state.encrypt;
-  btnEncryptSend.disabled = !state.encrypt || !hasRecipients || bccPresent;
+
+  // Re-encrypt mode: after a successful encryption, the button is only
+  // useful if recipients/policy/sign attributes have drifted from what's
+  // already on the draft. Otherwise re-clicking would just rebuild the
+  // exact same envelope.
+  const needsReencrypt =
+    state.encrypted && relevantStateString() !== state.encryptedSnapshot;
+  btnEncryptSend.textContent = state.encrypted
+    ? t("reencryptAndSend")
+    : t("encryptAndSend");
+  btnEncryptSend.disabled =
+    !state.encrypt ||
+    !hasRecipients ||
+    bccPresent ||
+    (state.encrypted && !needsReencrypt);
+
+  // Sync the x-pg-encrypted-recipients header to the current state. It
+  // should hold the recipient list when the encryption is current, and be
+  // cleared when state has drifted — so the OnMessageSend handler refuses
+  // to send a now-stale ciphertext. Reverting a change re-stamps the
+  // header, which re-allows sending without forcing a re-encrypt.
+  if (state.encrypted) {
+    const expected = needsReencrypt ? null : recipientsKey();
+    if (state.encryptedRecipientsHeader !== expected) {
+      state.encryptedRecipientsHeader = expected;
+      void persistEncryptedRecipients(expected);
+    }
+  }
 
   if (bccPresent && state.encrypt) {
     bccWarning.hidden = false;
@@ -214,19 +314,24 @@ async function openManageAccess(): Promise<void> {
 async function openSign(): Promise<void> {
   const senderEmail = getSenderEmail();
   // Sign editor is conceptually a single-recipient policy where the
-  // "recipient" is the sender's own address.
+  // "recipient" is the sender's own address. The editor expects the email
+  // attribute to be present; we add it back here.
   const signPolicy: Policy = {
-    [senderEmail]:
-      state.signAttributes.length > 0
-        ? state.signAttributes
-        : [{ t: EMAIL_ATTRIBUTE_TYPE, v: senderEmail }],
+    [senderEmail]: [
+      { t: EMAIL_ATTRIBUTE_TYPE, v: senderEmail },
+      ...state.signAttributes,
+    ],
   };
   openPolicyEditor({
     initialPolicy: signPolicy,
     sign: true,
     onSave: (next) => {
-      const attrs = next[senderEmail] ?? [];
-      state.signAttributes = attrs;
+      // signAttributes stores ONLY extras. pg.sign.yivi already takes
+      // senderEmail as a top-level field; including email here as well
+      // triggers a second email disclosure on the Yivi QR.
+      state.signAttributes = (next[senderEmail] ?? []).filter(
+        (a) => a.t !== EMAIL_ATTRIBUTE_TYPE
+      );
       showView("compose");
       renderToggleUI();
     },
@@ -251,6 +356,32 @@ async function encryptAndPrepareSend(): Promise<void> {
 
     const senderEmail = getSenderEmail();
     if (!senderEmail) throw new Error(t("composeNoSenderEmail"));
+
+    // If we're re-encrypting an already-encrypted draft, roll back first so
+    // we encrypt the original plaintext body and attachments instead of
+    // re-encrypting the previous envelope on top of itself.
+    if (state.encrypted) {
+      if (state.preEncryptBody !== null) {
+        await setBody(state.preEncryptBody);
+      }
+      if (state.encryptedAttachmentId !== null) {
+        try {
+          await removeAttachment(state.encryptedAttachmentId);
+        } catch (_e) {
+          // Best-effort — user may have removed it manually.
+        }
+      }
+      state.encrypted = false;
+      state.preEncryptBody = null;
+      state.encryptedAttachmentId = null;
+      state.encryptedSnapshot = null;
+      // Clear the on-message header too so the handler treats this as
+      // unencrypted from this point until the new ciphertext is stamped.
+      if (state.encryptedRecipientsHeader !== null) {
+        state.encryptedRecipientsHeader = null;
+        await persistEncryptedRecipients(null);
+      }
+    }
 
     const subject = await getSubject();
     const html = await getBody(Office.CoercionType.Html);
@@ -319,7 +450,7 @@ async function encryptAndPrepareSend(): Promise<void> {
       }
     }
 
-    await addBase64Attachment(POSTGUARD_ENCRYPTED_FILENAME, attBase64);
+    const attachmentId = await addBase64Attachment(POSTGUARD_ENCRYPTED_FILENAME, attBase64);
 
     // Force a server-side save before handing back to the user. Without this,
     // clicking Send can race the upload of the (potentially multi-MB) encrypted
@@ -328,7 +459,22 @@ async function encryptAndPrepareSend(): Promise<void> {
     setStatus("Saving encrypted draft…");
     await saveItem();
 
+    // Snapshot the encrypted state so renderToggleUI() can detect when the
+    // user changes recipients/policy/sign attrs and re-enable Re-encrypt.
+    state.encrypted = true;
+    state.preEncryptBody = html;
+    state.encryptedAttachmentId = attachmentId;
+    state.encryptedSnapshot = relevantStateString();
+
+    // Stamp the recipient set into a header so the OnMessageSend handler can
+    // refuse to send if the user adds a new recipient afterwards (the new
+    // recipient wouldn't be in the policy and couldn't decrypt).
+    const stampedRecipients = recipientsKey();
+    state.encryptedRecipientsHeader = stampedRecipients;
+    await persistEncryptedRecipients(stampedRecipients);
+
     showView("compose");
+    renderToggleUI();
     setStatus("Encrypted. Click Send to deliver the message.");
     await showNotification("postguard-encrypted", "PostGuard: message encrypted, click Send.", {
       persistent: true,
