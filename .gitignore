@@ -1,2 +1,14 @@
 node_modules/
 .env
+
+# Build output
+dist/
+lib/
+
+# Personal Claude Code permission grants
+.claude/settings.local.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
