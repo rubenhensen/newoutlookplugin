@@ -100,7 +100,7 @@ module.exports = async (env, options) => {
       new HtmlWebpackPlugin({
         filename: "launchevent.html",
         template: "./src/launchevent/launchevent.html",
-        chunks: ["polyfill", "launchevent"],
+        chunks: ["launchevent"],
       }),
       new CopyWebpackPlugin({
         patterns: [

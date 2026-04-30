@@ -98,6 +98,28 @@ export function saveItem(): Promise<string> {
   return p<string>((cb) => item.saveAsync(cb));
 }
 
+// Internet header storage. Used to share state (e.g. the encrypt toggle)
+// between the taskpane and the OnMessageSend launch event handler, which
+// runs in a separate runtime. customProperties does not propagate cross-
+// runtime in new Outlook (OWA-based), but internet headers are persisted
+// onto the message itself so they're guaranteed visible on send.
+//
+// Custom internet header names must start with "x-" per Office.js.
+export function setItemHeaders(headers: Record<string, string>): Promise<void> {
+  const item = getItem() as Office.MessageCompose;
+  return p<void>((cb) => item.internetHeaders.setAsync(headers, cb));
+}
+
+export function removeItemHeaders(names: string[]): Promise<void> {
+  const item = getItem() as Office.MessageCompose;
+  return p<void>((cb) => item.internetHeaders.removeAsync(names, cb));
+}
+
+export function getItemHeaders(names: string[]): Promise<Record<string, string>> {
+  const item = getItem() as Office.MessageCompose;
+  return p<Record<string, string>>((cb) => item.internetHeaders.getAsync(names, cb));
+}
+
 // --- Read mode getters ---
 
 export function getReadAttachments(): Office.AttachmentDetails[] {

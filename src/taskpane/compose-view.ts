@@ -13,6 +13,9 @@ import {
   removeAttachment,
   addBase64Attachment,
   saveItem,
+  setItemHeaders,
+  removeItemHeaders,
+  getItemHeaders,
   getSenderEmail,
   showNotification,
 } from "../lib/office-helpers";
@@ -35,6 +38,30 @@ import { openPolicyEditor } from "./policy-editor";
 import { showView, setStatus, showError } from "./taskpane";
 
 const ADDIN_VERSION = "0.1.0";
+
+// Internet-header key shared with the OnMessageSend handler. Custom header
+// names must be x-prefixed.
+const HEADER_ENCRYPT_ON_SEND = "x-pg-encrypt-on-send";
+
+async function persistEncryptOnSend(value: boolean): Promise<void> {
+  try {
+    // saveItem() before and after the header write: the first ensures the
+    // draft has an itemId, the second flushes the header change to the
+    // server so the OnMessageSend handler sees it.
+    await saveItem();
+    if (value) {
+      await setItemHeaders({ [HEADER_ENCRYPT_ON_SEND]: "true" });
+    } else {
+      await removeItemHeaders([HEADER_ENCRYPT_ON_SEND]);
+    }
+    await saveItem();
+    // eslint-disable-next-line no-console
+    console.log(`[pg] persisted encryptOnSend=${value}`);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[pg] failed to persist encryptOnSend:`, e);
+  }
+}
 
 interface ComposeState {
   encrypt: boolean;
@@ -68,6 +95,7 @@ export async function mountComposeView(): Promise<void> {
 
   toggle.addEventListener("change", () => {
     state.encrypt = toggle.checked;
+    void persistEncryptOnSend(state.encrypt);
     renderToggleUI();
   });
 
@@ -83,6 +111,15 @@ export async function mountComposeView(): Promise<void> {
     if (state.busy) return;
     void encryptAndPrepareSend();
   });
+
+  // If the user previously toggled encryption on for this draft (e.g. they
+  // hit Send, got soft-blocked, and reopened the taskpane), pick that up.
+  try {
+    const headers = await getItemHeaders([HEADER_ENCRYPT_ON_SEND]);
+    state.encrypt = headers[HEADER_ENCRYPT_ON_SEND] === "true";
+  } catch (_e) {
+    // Ignore — default state.encrypt = false is fine.
+  }
 
   await refreshRecipients();
   renderToggleUI();
