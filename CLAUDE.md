@@ -85,3 +85,7 @@ Webpack still has `experiments.asyncWebAssembly` + `syncWebAssembly` and a `\.wa
 - TypeScript `strict: true`; `noEmitOnError: true`. Babel does the actual TS transform via `@babel/preset-typescript`.
 - The `@e4a/pg-js` types are loose in places — the code uses `as never` casts at SDK boundaries deliberately. Don't try to "fix" these without verifying against the SDK source.
 - `console`/global lint warnings are silenced by `office-addin-lint` defaults; keep error surfaces user-visible via `showError` / `setStatus` instead.
+
+## Outlook Add-in quirks
+
+`docs/outlook-quirks.md` is a running log of platform behaviors that surprised us during development — Smart Alerts / launchevent dispatch oddities, cross-runtime state-sharing issues (`customProperties` vs `internetHeaders`), CSS interactions with `[hidden]`, debugging via `--devtools`, etc. Read it before debugging anything that "should work" but doesn't, and add to it whenever you discover a new surprise.
