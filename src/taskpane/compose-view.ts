@@ -46,6 +46,14 @@ const HEADER_ENCRYPT_ON_SEND = "x-pg-encrypt-on-send";
 // time. The handler compares this against the message's current recipients
 // to refuse sending an encrypted blob to anyone who wasn't in the policy.
 const HEADER_ENCRYPTED_RECIPIENTS = "x-pg-encrypted-recipients";
+// PostGuard interop marker, written to outbound encrypted messages. The
+// Thunderbird addon writes the same header (background.ts:485) and uses it
+// as the OnMessageRead filter for the Outlook add-in. Detection on the
+// receive side is still primarily attachment + body armor, but the header
+// is a third independent signal that survives any HTML sanitation OWA
+// applies during send.
+const HEADER_POSTGUARD = "x-postguard";
+const POSTGUARD_VERSION = "0.1.0";
 
 async function persistEncryptOnSend(value: boolean): Promise<void> {
   try {
@@ -468,10 +476,16 @@ async function encryptAndPrepareSend(): Promise<void> {
 
     // Stamp the recipient set into a header so the OnMessageSend handler can
     // refuse to send if the user adds a new recipient afterwards (the new
-    // recipient wouldn't be in the policy and couldn't decrypt).
+    // recipient wouldn't be in the policy and couldn't decrypt). At the same
+    // time write the cross-addon x-postguard interop marker.
     const stampedRecipients = recipientsKey();
     state.encryptedRecipientsHeader = stampedRecipients;
-    await persistEncryptedRecipients(stampedRecipients);
+    await saveItem();
+    await setItemHeaders({
+      [HEADER_ENCRYPTED_RECIPIENTS]: stampedRecipients,
+      [HEADER_POSTGUARD]: POSTGUARD_VERSION,
+    });
+    await saveItem();
 
     showView("compose");
     renderToggleUI();

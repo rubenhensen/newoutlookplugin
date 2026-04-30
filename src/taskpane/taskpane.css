@@ -374,6 +374,34 @@ body {
   background: white;
 }
 
+.pg-decrypted-attachments {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--pg-secondary-bg);
+  border-radius: var(--pg-radius);
+}
+
+.pg-attachment-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.pg-attachment-list li {
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.pg-attachment-link {
+  color: var(--pg-accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.pg-attachment-link:hover {
+  text-decoration: underline;
+}
+
 /* Spinner */
 
 .pg-spinner {

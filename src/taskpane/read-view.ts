@@ -22,7 +22,8 @@ import {
   POSTGUARD_HEADER,
   extractArmoredCiphertext,
   looksLikePostGuard,
-  bodyFromMime,
+  parseDecryptedMime,
+  ParsedAttachment,
   readMimeHeader,
 } from "../lib/mime";
 import { Badge, FriendlySender } from "../lib/types";
@@ -232,14 +233,65 @@ function renderDecrypted(plaintext: Uint8Array, sender: FriendlySender | null): 
     }
   }
 
+  const parsed = parseDecryptedMime(mime);
+  const bodyText =
+    parsed.htmlBody ?? parsed.plainBody ?? "";
+  const isHtml = parsed.htmlBody != null;
+
   const iframe = byId<HTMLIFrameElement>("pg-decrypted-body");
-  // Display the plaintext body. We pull just the body section from the
-  // MIME envelope; multipart bodies render reasonably even without
-  // sub-part parsing because the largest text/* part is normally first.
-  const body = bodyFromMime(mime);
-  iframe.srcdoc = wrapHtml(body);
+  iframe.srcdoc = wrapHtml(bodyText, isHtml);
+
+  renderAttachments(parsed.attachments);
 
   showView("decrypted");
+}
+
+let attachmentObjectUrls: string[] = [];
+
+function renderAttachments(attachments: ParsedAttachment[]): void {
+  // Revoke any blobs from a previous decryption to free memory.
+  for (const url of attachmentObjectUrls) URL.revokeObjectURL(url);
+  attachmentObjectUrls = [];
+
+  const host = byId<HTMLElement>("pg-decrypted-attachments");
+  host.innerHTML = "";
+  if (attachments.length === 0) {
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+
+  const heading = document.createElement("div");
+  heading.className = "pg-meta";
+  heading.textContent = `Attachments (${attachments.length}):`;
+  host.appendChild(heading);
+
+  const list = document.createElement("ul");
+  list.className = "pg-attachment-list";
+  for (const att of attachments) {
+    const li = document.createElement("li");
+    const blob = new Blob([att.data as BlobPart], { type: att.type || "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    attachmentObjectUrls.push(url);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = att.name;
+    a.textContent = att.name;
+    a.className = "pg-attachment-link";
+    const size = document.createElement("span");
+    size.className = "pg-meta";
+    size.textContent = `  (${formatSize(att.data.byteLength)})`;
+    li.appendChild(a);
+    li.appendChild(size);
+    list.appendChild(li);
+  }
+  host.appendChild(list);
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function badgesFromSender(sender: FriendlySender | null): Badge[] {
@@ -252,15 +304,13 @@ function badgesFromSender(sender: FriendlySender | null): Badge[] {
   return out;
 }
 
-function wrapHtml(maybeHtml: string): string {
-  // Heuristic: if the content already looks like HTML, render as-is;
-  // otherwise wrap as preformatted text so newlines survive.
-  if (/<html[\s>]|<body[\s>]/i.test(maybeHtml)) return maybeHtml;
-  if (/<[a-z][\s\S]*?>/i.test(maybeHtml)) {
-    return `<!doctype html><html><body>${maybeHtml}</body></html>`;
+function wrapHtml(body: string, isHtml: boolean): string {
+  if (isHtml) {
+    if (/<html[\s>]|<body[\s>]/i.test(body)) return body;
+    return `<!doctype html><html><body>${body}</body></html>`;
   }
   return `<!doctype html><html><body><pre style="white-space:pre-wrap;font-family:Segoe UI,Helvetica,Arial,sans-serif">${escape(
-    maybeHtml
+    body
   )}</pre></body></html>`;
 }
 
