@@ -39,25 +39,6 @@ body {
   height: 100%;
 }
 
-.pg-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  background: var(--pg-accent);
-  color: var(--pg-accent-fg);
-}
-
-.pg-logo {
-  width: 24px;
-  height: 24px;
-}
-
-.pg-title {
-  font-weight: 600;
-  font-size: 15px;
-}
-
 .pg-status {
   padding: 8px 16px;
   background: var(--pg-info-bg);
@@ -83,6 +64,10 @@ body {
 
 .pg-view {
   display: block;
+}
+
+.pg-view[hidden] {
+  display: none;
 }
 
 .pg-section-title {

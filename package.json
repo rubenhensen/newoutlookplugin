@@ -10,7 +10,6 @@
     "dev_server_port": 3000
   },
   "scripts": {
-    "postinstall": "node scripts/copy-pg-wasm.mjs",
     "build": "webpack --mode production",
     "build:dev": "webpack --mode development",
     "dev-server": "webpack serve --mode development",
@@ -25,9 +24,12 @@
     "watch": "webpack --mode development --watch"
   },
   "dependencies": {
-    "@e4a/pg-js": "^0.9.1",
+    "@e4a/pg-js": "^0.10.0",
     "core-js": "^3.36.0",
     "regenerator-runtime": "^0.14.1"
+  },
+  "overrides": {
+    "strip-bom": "^4.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",

@@ -89,6 +89,15 @@ export function addBase64Attachment(filename: string, base64: string): Promise<s
   );
 }
 
+// Commits the current draft (subject, body, attachments) to the server. We need
+// this after writing the encrypted body + attachment because Send otherwise races
+// the server-side upload of those changes; new Outlook on Windows shows a Smart
+// Alerts-style "PostGuard timed out" dialog when that race occurs.
+export function saveItem(): Promise<string> {
+  const item = getItem() as Office.MessageCompose;
+  return p<string>((cb) => item.saveAsync(cb));
+}
+
 // --- Read mode getters ---
 
 export function getReadAttachments(): Office.AttachmentDetails[] {

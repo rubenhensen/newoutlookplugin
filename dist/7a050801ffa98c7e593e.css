@@ -85,6 +85,10 @@ body {
   display: block;
 }
 
+.pg-view[hidden] {
+  display: none;
+}
+
 .pg-section-title {
   margin: 0 0 12px;
   font-size: 16px;

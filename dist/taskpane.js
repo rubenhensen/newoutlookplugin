@@ -1149,6 +1149,34 @@ __webpack_require__.r(__webpack_exports__);
 
 /* global Office */
 
+// Debug logging that surfaces in the taskpane itself. Used to diagnose
+// hangs/errors without DevTools attached. Remove once stable.
+function dlog(msg) {
+  const host = document.getElementById("view-loading");
+  if (!host) return;
+  let pre = document.getElementById("pg-debug-log");
+  if (!pre) {
+    pre = document.createElement("pre");
+    pre.id = "pg-debug-log";
+    pre.style.cssText = "font-family:Consolas,monospace;font-size:11px;text-align:left;white-space:pre-wrap;padding:8px;background:#f4f4f4;border:1px solid #ddd;margin-top:12px;max-height:300px;overflow:auto;";
+    host.appendChild(pre);
+  }
+  const ts = new Date().toISOString().slice(11, 23);
+  pre.textContent += `[${ts}] ${msg}\n`;
+}
+window.addEventListener("error", e => {
+  dlog(`window.error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`);
+});
+window.addEventListener("unhandledrejection", e => {
+  const reason = e.reason instanceof Error ? `${e.reason.message}\n${e.reason.stack}` : String(e.reason);
+  dlog(`unhandledrejection: ${reason}`);
+});
+dlog("script loaded; waiting for Office.onReady");
+
+// Fail loudly if Office.onReady doesn't fire — points at office.js load failure.
+const onReadyTimeout = window.setTimeout(() => {
+  dlog("TIMEOUT: Office.onReady did not fire within 8s");
+}, 8000);
 const views = {
   loading: byId("view-loading"),
   compose: byId("view-compose"),
@@ -1187,6 +1215,8 @@ function byId(id) {
   return document.getElementById(id);
 }
 Office.onReady(info => {
+  window.clearTimeout(onReadyTimeout);
+  dlog(`Office.onReady fired; host=${info.host} platform=${info.platform}`);
   if (info.host !== Office.HostType.Outlook) {
     showError("PostGuard only runs inside Outlook.");
     return;
@@ -1198,14 +1228,23 @@ Office.onReady(info => {
 async function bootstrap() {
   showView("loading");
   setStatus("");
+  dlog("bootstrap: start");
   try {
-    if ((0,_lib_office_helpers__WEBPACK_IMPORTED_MODULE_0__.isComposeMode)()) {
+    const compose = (0,_lib_office_helpers__WEBPACK_IMPORTED_MODULE_0__.isComposeMode)();
+    dlog(`bootstrap: isComposeMode=${compose}`);
+    if (compose) {
+      dlog("bootstrap: mountComposeView…");
       await (0,_compose_view__WEBPACK_IMPORTED_MODULE_1__.mountComposeView)();
+      dlog("bootstrap: mountComposeView done");
     } else {
+      dlog("bootstrap: mountReadView…");
       await (0,_read_view__WEBPACK_IMPORTED_MODULE_2__.mountReadView)();
+      dlog("bootstrap: mountReadView done");
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "PostGuard failed to start.";
+    const stack = err instanceof Error && err.stack ? err.stack : "";
+    dlog(`bootstrap: ERROR ${message}\n${stack}`);
     showError(message);
   }
 }
@@ -4549,17 +4588,6 @@ module.exports = __webpack_require__.p + "assets/icon-32.png";
 
 /***/ },
 
-/***/ "./node_modules/@e4a/pg-js/dist/index_bg.wasm"
-/*!****************************************************!*\
-  !*** ./node_modules/@e4a/pg-js/dist/index_bg.wasm ***!
-  \****************************************************/
-(module, __unused_webpack_exports, __webpack_require__) {
-
-"use strict";
-module.exports = __webpack_require__.p + "index_bg.wasm";
-
-/***/ },
-
 /***/ "./src/taskpane/taskpane.css"
 /*!***********************************!*\
   !*** ./src/taskpane/taskpane.css ***!
@@ -4567,7 +4595,7 @@ module.exports = __webpack_require__.p + "index_bg.wasm";
 (module, __unused_webpack_exports, __webpack_require__) {
 
 "use strict";
-module.exports = __webpack_require__.p + "59bbe3d2cbdc2e0a8dba.css";
+module.exports = __webpack_require__.p + "7a050801ffa98c7e593e.css";
 
 /***/ },
 
@@ -6991,7 +7019,7 @@ async function resolveSigningKeys(pkgUrl, sign, headers) {
 }
 //#endregion
 //#region src/crypto/chunker.ts
-const DEFAULT_CHUNK_SIZE$1 = 1024 * 1024;
+const DEFAULT_CHUNK_SIZE$1 = 5e6;
 var Chunker = class extends TransformStream {
 	constructor(chunkSize = DEFAULT_CHUNK_SIZE$1, offset) {
 		let buf = new ArrayBuffer(chunkSize);
@@ -8169,7 +8197,7 @@ async function __wbg_init(module_or_path) {
 	if (wasm !== void 0) return wasm;
 	if (module_or_path !== void 0) if (Object.getPrototypeOf(module_or_path) === Object.prototype) ({module_or_path} = module_or_path);
 	else console.warn("using deprecated parameters for the initialization function; pass a single object instead");
-	if (module_or_path === void 0) module_or_path = new URL(/* asset import */ __webpack_require__(/*! index_bg.wasm */ "./node_modules/@e4a/pg-js/dist/index_bg.wasm"), __webpack_require__.b);
+	if (module_or_path === void 0) module_or_path = new URL("index_bg.wasm", "file:///C:/Users/Ruben/Repos/newoutlookplugin/node_modules/@e4a/pg-js/dist/index.mjs");
 	const imports = __wbg_get_imports();
 	if (typeof module_or_path === "string" || typeof Request === "function" && module_or_path instanceof Request || typeof URL === "function" && module_or_path instanceof URL) module_or_path = fetch(module_or_path);
 	const { instance, module } = await __wbg_load(await module_or_path, imports);
@@ -8197,7 +8225,7 @@ async function loadWasm() {
 }
 //#endregion
 //#region src/crypto/encrypt.ts
-const UPLOAD_CHUNK_SIZE = 1024 * 1024;
+const DEFAULT_UPLOAD_CHUNK_SIZE = 5e6;
 /** Full encryption pipeline: sign -> policy -> ZIP -> seal -> upload */
 async function encryptPipeline(options) {
 	const { pkgUrl, cryptifyUrl, sign, files, recipients, onProgress, signal, delivery, headers } = options;
@@ -8235,7 +8263,7 @@ async function encryptPipeline(options) {
 			}
 		}
 	});
-	const uploadChunker = new Chunker(UPLOAD_CHUNK_SIZE);
+	const uploadChunker = new Chunker(options.uploadChunkSize ?? DEFAULT_UPLOAD_CHUNK_SIZE);
 	const { writable, pipeDone } = withTransform(uploadStream.writable, uploadChunker, effectiveSignal);
 	await sealStream(mpk, sealOptions, readable, writable);
 	await pipeDone;
@@ -8325,6 +8353,7 @@ var Sealed = class {
 			recipients,
 			onProgress,
 			signal,
+			uploadChunkSize: this.config.uploadChunkSize,
 			delivery: opts?.notify,
 			headers: this.config.headers,
 			signingKeys

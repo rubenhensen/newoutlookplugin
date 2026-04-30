@@ -12,6 +12,7 @@ import {
   readComposeAttachmentBytes,
   removeAttachment,
   addBase64Attachment,
+  saveItem,
   getSenderEmail,
   showNotification,
 } from "../lib/office-helpers";
@@ -85,11 +86,17 @@ export async function mountComposeView(): Promise<void> {
 
   await refreshRecipients();
   renderToggleUI();
-
-  // Re-pull recipients each time the user comes back to the taskpane.
-  // Outlook does not have a "recipient changed" event in compose, so we
-  // refresh on toggle interaction and on every Encrypt & Send press.
   bccWarning.hidden = state.recipients.bcc.length === 0 || !state.encrypt;
+
+  // Live recipient updates (Mailbox 1.7+). Without this the toggle UI is
+  // stuck in whatever state the recipient lists were in at mount time.
+  const item = Office.context.mailbox.item as Office.MessageCompose;
+  item.addHandlerAsync(Office.EventType.RecipientsChanged, () => {
+    void (async () => {
+      await refreshRecipients();
+      renderToggleUI();
+    })();
+  });
 }
 
 function renderToggleUI(): void {
@@ -276,6 +283,13 @@ async function encryptAndPrepareSend(): Promise<void> {
     }
 
     await addBase64Attachment(POSTGUARD_ENCRYPTED_FILENAME, attBase64);
+
+    // Force a server-side save before handing back to the user. Without this,
+    // clicking Send can race the upload of the (potentially multi-MB) encrypted
+    // body + attachment, which new Outlook surfaces as a "PostGuard timed out"
+    // Smart Alerts dialog after ~15s.
+    setStatus("Saving encrypted draft…");
+    await saveItem();
 
     showView("compose");
     setStatus("Encrypted. Click Send to deliver the message.");
