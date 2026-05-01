@@ -219,7 +219,7 @@ function saveItemAsync(item: Office.MessageCompose): Promise<void> {
 // screen-percentage from these at runtime because Office.displayDialog
 // only accepts percentages — picking fixed percentages gives a tiny
 // dialog on ultrawide monitors and an oversized one on laptops.
-const YIVI_DIALOG_TARGET_WIDTH_PX = 380;
+const YIVI_DIALOG_TARGET_WIDTH_PX = 300;
 const YIVI_DIALOG_TARGET_HEIGHT_PX = 520;
 
 function pctOfScreen(targetPx: number, screenPx: number): number {
