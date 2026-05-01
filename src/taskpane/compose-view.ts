@@ -448,11 +448,16 @@ async function encryptAndPrepareSend(): Promise<void> {
       data: mime,
     } as never);
 
+    // uploadToCryptify: false — see yivi-dialog.ts for rationale. Skips
+    // the Cryptify upload (and its notification email) for tier-2
+    // envelopes; the recipient still gets the encrypted attachment
+    // delivered from our own email account.
     const envelope = await pg.email.createEnvelope({
       sealed,
       from: senderEmail,
       websiteUrl: POSTGUARD_WEBSITE_URL,
       senderAttributes: state.signAttributes.map((a) => a.v),
+      uploadToCryptify: false,
     } as never);
 
     await setSubject(envelope.subject);

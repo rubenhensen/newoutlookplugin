@@ -146,10 +146,17 @@ async function runEncryption(req: EncryptRequest): Promise<EncryptResult> {
     data: mime,
   } as never);
 
+  // uploadToCryptify: false keeps tier-2 envelopes as a local attachment
+  // only — no Cryptify upload, no notification email. The user's message
+  // is delivered from their own email account; we don't want a second
+  // "you have a file" mail from Cryptify. Tier 3 (>~10MB ciphertext)
+  // still uploads because the attachment fallback isn't available there;
+  // suppressing that notification is a pg-js + cryptify follow-up.
   const envelope = await pg.email.createEnvelope({
     sealed,
     from: req.senderEmail,
     websiteUrl: POSTGUARD_WEBSITE_URL,
+    uploadToCryptify: false,
   } as never);
 
   setSubtitle("Encrypting…");
