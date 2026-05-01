@@ -34,6 +34,7 @@ module.exports = async (env, options) => {
       taskpane: ["./src/taskpane/taskpane.ts", "./src/taskpane/taskpane.html"],
       commands: "./src/commands/commands.ts",
       launchevent: "./src/launchevent/launchevent.ts",
+      "yivi-dialog": ["./src/yivi-dialog/yivi-dialog.ts", "./src/yivi-dialog/yivi-dialog.html"],
     },
     output: {
       clean: true,
@@ -67,18 +68,6 @@ module.exports = async (env, options) => {
           type: "asset/resource",
           generator: { filename: "[name][ext]" },
         },
-        {
-          // Workaround: @e4a/pg-js inlines pg-wasm as base64, but wasm-bindgen
-          // leaves a dead `new URL("index_bg.wasm", import.meta.url)` branch
-          // in the bundled init function. Webpack tries to statically resolve
-          // it and fails because no separate wasm file ships in pg-js/dist.
-          // Tracked upstream:
-          //   https://github.com/encryption4all/postguard/issues/153
-          //   https://github.com/encryption4all/postguard-js/issues/30
-          // Remove this rule once a fixed pg-js (or pg-wasm) is released.
-          test: /[\\/]node_modules[\\/]@e4a[\\/]pg-js[\\/]/,
-          parser: { url: false },
-        },
       ],
     },
     plugins: [
@@ -101,6 +90,11 @@ module.exports = async (env, options) => {
         filename: "launchevent.html",
         template: "./src/launchevent/launchevent.html",
         chunks: ["launchevent"],
+      }),
+      new HtmlWebpackPlugin({
+        filename: "yivi-dialog.html",
+        template: "./src/yivi-dialog/yivi-dialog.html",
+        chunks: ["polyfill", "yivi-dialog"],
       }),
       new CopyWebpackPlugin({
         patterns: [

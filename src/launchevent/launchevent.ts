@@ -1,22 +1,37 @@
 // OnMessageSend handler. Runs in a separate WebView runtime from the
 // taskpane, so it cannot read in-memory taskpane state. It uses x-
 // prefixed internet headers set by the taskpane plus the attachment
-// list to decide whether the message is allowed through. Custom
-// properties were tried first but did not propagate cross-runtime in
-// new Outlook (OWA-based).
+// list to decide whether the message is allowed through.
 //
 // Behavior:
 //  - encrypt-on-send not requested            → allow.
 //  - requested + encrypted + recipients match → allow.
-//  - requested + not yet encrypted            → block (encrypt prompt).
+//  - requested + not yet encrypted            → open Yivi dialog, encrypt
+//                                               in-line, apply result,
+//                                               then allow.
 //  - requested + encrypted + recipients drift → block (re-encrypt prompt).
+//
+// v1 of the one-click flow: text-only messages with email-only policy
+// and email-only sign. Attachments and custom policy/sign require the
+// manual taskpane "Encrypt & Send" flow until those are marshalled
+// through to the dialog.
 
 /* global Office */
 
+import {
+  ChunkAssembler,
+  chunkPayload,
+  isChunkMessage,
+  ChunkMessage,
+} from "../lib/dialog-chunk";
+
 const HEADER_ENCRYPT_ON_SEND = "x-pg-encrypt-on-send";
 const HEADER_ENCRYPTED_RECIPIENTS = "x-pg-encrypted-recipients";
+const HEADER_POSTGUARD = "x-postguard";
+const POSTGUARD_VERSION = "0.1.0";
 const POSTGUARD_ENCRYPTED_FILENAME = "postguard.encrypted";
 const COMPOSE_BUTTON_ID = "postGuardComposeButton";
+const YIVI_DIALOG_URL = "https://localhost:3000/yivi-dialog.html";
 
 const NOT_ENCRYPTED_MESSAGE =
   "PostGuard is on but this message is not encrypted yet. " +
@@ -26,15 +41,28 @@ const STALE_ENCRYPTION_MESSAGE =
   "PostGuard recipients or settings changed since the last encryption. " +
   "Open the PostGuard taskpane and click Re-encrypt & Send before sending.";
 
+interface DialogMessage {
+  type: string;
+  [key: string]: unknown;
+}
+
+interface EncryptResult {
+  subject: string;
+  htmlBody: string;
+  /** null in tier 3 — no local attachment to add (Cryptify-only flow). */
+  attachmentBase64: string | null;
+  tier: "tier1" | "tier2" | "tier3";
+  uploadUuid: string | null;
+}
+
 function log(msg: string): void {
   // eslint-disable-next-line no-console
   console.log(`[pg-launchevent] ${msg}`);
 }
 
-// Belt-and-suspenders: if the handler ever takes more than 12 seconds, just
-// allow the send. Better to fail open than have new Outlook hang forever
-// behind the "PostGuard duurt langer dan verwacht" dialog.
-function allowAfterTimeout(event: Office.AddinCommands.Event, ms = 12000): () => void {
+function allowAfterTimeout(event: Office.AddinCommands.Event, ms = 270000): () => void {
+  // 4½ min — gives the user time to find their phone and scan the QR.
+  // Outlook's own Smart Alerts hard-cap is 5 min so we stay just under.
   const timer = setTimeout(() => {
     log(`fallback timeout (${ms}ms) reached; allowing the send`);
     try {
@@ -71,6 +99,310 @@ function getRecipientsAsync(
       resolve(res.status === Office.AsyncResultStatus.Succeeded ? res.value : [])
     );
   });
+}
+
+function getSubjectAsync(item: Office.MessageCompose): Promise<string> {
+  return new Promise((resolve, reject) => {
+    item.subject.getAsync((res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve(res.value);
+      else reject(res.error);
+    });
+  });
+}
+
+function setSubjectAsync(item: Office.MessageCompose, value: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    item.subject.setAsync(value, (res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve();
+      else reject(res.error);
+    });
+  });
+}
+
+function getBodyHtmlAsync(item: Office.MessageCompose): Promise<string> {
+  return new Promise((resolve, reject) => {
+    item.body.getAsync(Office.CoercionType.Html, (res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve(res.value);
+      else reject(res.error);
+    });
+  });
+}
+
+function setBodyHtmlAsync(item: Office.MessageCompose, value: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    item.body.setAsync(value, { coercionType: Office.CoercionType.Html }, (res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve();
+      else reject(res.error);
+    });
+  });
+}
+
+function addBase64AttachmentAsync(
+  item: Office.MessageCompose,
+  filename: string,
+  base64: string
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    item.addFileAttachmentFromBase64Async(base64, filename, (res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded)
+        resolve(res.value as unknown as string);
+      else reject(res.error);
+    });
+  });
+}
+
+function getAttachmentContentAsync(
+  item: Office.MessageCompose,
+  attachmentId: string
+): Promise<Office.AttachmentContent> {
+  return new Promise((resolve, reject) => {
+    item.getAttachmentContentAsync(attachmentId, (res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve(res.value);
+      else reject(res.error);
+    });
+  });
+}
+
+function removeAttachmentAsync(
+  item: Office.MessageCompose,
+  attachmentId: string
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    item.removeAttachmentAsync(attachmentId, (res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve();
+      else reject(res.error);
+    });
+  });
+}
+
+function guessContentType(name: string): string {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  const map: Record<string, string> = {
+    pdf: "application/pdf",
+    txt: "text/plain",
+    csv: "text/csv",
+    html: "text/html",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    zip: "application/zip",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  };
+  return map[ext] ?? "application/octet-stream";
+}
+
+function setHeadersAsync(
+  item: Office.MessageCompose,
+  headers: Record<string, string>
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    item.internetHeaders.setAsync(headers, (res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve();
+      else reject(res.error);
+    });
+  });
+}
+
+function saveItemAsync(item: Office.MessageCompose): Promise<void> {
+  return new Promise((resolve, reject) => {
+    item.saveAsync((res) => {
+      if (res.status === Office.AsyncResultStatus.Succeeded) resolve();
+      else reject(res.error);
+    });
+  });
+}
+
+// Opens the Yivi dialog with an encrypt-request payload and waits for
+// the dialog to post the encrypted result back. Resolves with the
+// envelope; rejects on error or user cancel.
+function runEncryptDialog(payload: DialogMessage): Promise<EncryptResult> {
+  return new Promise((resolve, reject) => {
+    Office.context.ui.displayDialogAsync(
+      YIVI_DIALOG_URL,
+      // height/width are percentages of the screen (1-99), not pixels.
+      // Sized to roughly fit the Yivi QR widget plus title/buttons; on a
+      // 1920×1080 display this is ~580×590, on a smaller laptop closer
+      // to 480×500.
+      //
+      // promptBeforeOpen: false suppresses the "PostGuard is opening
+      // another window" confirmation. Honored because the dialog URL is
+      // on the same origin as the add-in's source location. Requires
+      // Mailbox 1.9 (we require 1.12 in VersionOverridesV1_1).
+      { height: 55, width: 30, displayInIframe: false, promptBeforeOpen: false },
+      (asyncResult) => {
+        log(`displayDialogAsync status=${asyncResult.status}`);
+        if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) {
+          reject(new Error(`displayDialogAsync failed: ${asyncResult.error?.message}`));
+          return;
+        }
+        const dialog = asyncResult.value;
+        const inbound = new ChunkAssembler();
+        let settled = false;
+        // We deliberately don't dialog.close() here — the dialog manages
+        // its own close lifecycle (Cancel + Close buttons, plus user-X).
+        // Keeping it open after we apply the encrypt result lets the user
+        // read DevTools / the success message at their own pace; the Send
+        // has already been released by event.completed.
+        const settle = (cb: () => void): void => {
+          if (settled) return;
+          settled = true;
+          cb();
+        };
+
+        const dispatch = (body: DialogMessage): void => {
+          log(`dialog → handler: ${body.type}`);
+          switch (body.type) {
+            case "ready": {
+              const chunks = chunkPayload(payload);
+              log(`sending ${chunks.length} chunk(s) to dialog`);
+              for (const c of chunks) {
+                dialog.messageChild(JSON.stringify(c));
+              }
+              break;
+            }
+            case "encrypt-result":
+              settle(() => resolve(body as unknown as EncryptResult));
+              break;
+            case "encrypt-error":
+              settle(() =>
+                reject(new Error(String(body.message ?? "Encryption failed")))
+              );
+              break;
+            case "cancelled":
+              settle(() => reject(new Error("Cancelled in dialog")));
+              break;
+            default:
+              log(`unhandled dialog message: ${body.type}`);
+          }
+        };
+
+        dialog.addEventHandler(
+          Office.EventType.DialogMessageReceived,
+          (arg: { message: string } | { error: number }) => {
+            if ("error" in arg) {
+              log(`dialog message error: ${arg.error}`);
+              settle(() => reject(new Error(`Dialog error ${arg.error}`)));
+              return;
+            }
+            let body: DialogMessage;
+            try {
+              body = JSON.parse(arg.message) as DialogMessage;
+            } catch {
+              log(`could not parse dialog message: ${arg.message}`);
+              return;
+            }
+            if (isChunkMessage(body)) {
+              const reassembled = inbound.ingest(body as ChunkMessage);
+              if (reassembled) dispatch(reassembled as DialogMessage);
+              return;
+            }
+            dispatch(body);
+          }
+        );
+
+        dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
+          log(`dialog event: ${JSON.stringify(arg)}`);
+          if ("error" in arg && arg.error === 12006) {
+            settle(() => reject(new Error("Dialog closed by user")));
+          }
+        });
+      }
+    );
+  });
+}
+
+async function readUserAttachments(
+  item: Office.MessageCompose,
+  attachments: Office.AttachmentDetailsCompose[]
+): Promise<{ name: string; type: string; base64: string }[]> {
+  const out: { name: string; type: string; base64: string }[] = [];
+  for (const a of attachments) {
+    // Skip cloud attachments — Office.js can't read their bytes.
+    if (a.attachmentType === Office.MailboxEnums.AttachmentType.Cloud) {
+      log(`skipping cloud attachment: ${a.name}`);
+      continue;
+    }
+    try {
+      const content = await getAttachmentContentAsync(item, a.id);
+      const base64Len = content.content?.length ?? 0;
+      log(
+        `attachment "${a.name}" format=${content.format} ` +
+          `base64Len=${base64Len} declaredSize=${a.size ?? "?"}`
+      );
+      // Tenant DLP can scrub attachment bytes (e.g. blocked extensions like
+      // .exe) while still reporting metadata. Detect: declared size > 0 but
+      // returned content is empty. We refuse rather than silently encrypt
+      // a 0-byte attachment.
+      if ((a.size ?? 0) > 0 && base64Len === 0) {
+        throw new Error(
+          `Outlook returned no content for attachment "${a.name}" — ` +
+            `your tenant likely blocks this file type. ` +
+            `Remove the attachment or zip it with a different extension.`
+        );
+      }
+      if (content.format === Office.MailboxEnums.AttachmentContentFormat.Base64) {
+        out.push({ name: a.name, type: guessContentType(a.name), base64: content.content });
+      } else {
+        log(`unsupported attachment format for ${a.name}: ${content.format}`);
+      }
+    } catch (e) {
+      log(`failed to read attachment ${a.name}: ${String(e)}`);
+      throw e;
+    }
+  }
+  return out;
+}
+
+async function encryptAndApply(
+  event: Office.AddinCommands.Event,
+  item: Office.MessageCompose,
+  to: Office.EmailAddressDetails[],
+  cc: Office.EmailAddressDetails[],
+  userAttachments: Office.AttachmentDetailsCompose[]
+): Promise<void> {
+  const senderEmail = Office.context.mailbox.userProfile.emailAddress.toLowerCase();
+  const subject = await getSubjectAsync(item);
+  const htmlBody = await getBodyHtmlAsync(item);
+  const attachments = await readUserAttachments(item, userAttachments);
+
+  const result = await runEncryptDialog({
+    type: "encrypt-request",
+    senderEmail,
+    to: to.map((r) => r.emailAddress.toLowerCase()),
+    cc: cc.map((r) => r.emailAddress.toLowerCase()),
+    subject,
+    htmlBody,
+    attachments,
+  });
+
+  await setSubjectAsync(item, result.subject);
+  await setBodyHtmlAsync(item, result.htmlBody);
+  // Remove the original plaintext attachments now that they're inside the
+  // encrypted envelope. Best-effort: a cloud attachment we couldn't read
+  // would still be sent in the clear, so we leave it alone.
+  for (const a of userAttachments) {
+    if (a.attachmentType === Office.MailboxEnums.AttachmentType.Cloud) continue;
+    try {
+      await removeAttachmentAsync(item, a.id);
+    } catch (e) {
+      log(`failed to remove original attachment ${a.name}: ${String(e)}`);
+    }
+  }
+  // Tier 1/2: include the encrypted bytes locally as postguard.encrypted.
+  // Tier 3: pg-js gave us no attachment (too large) — recipients use the
+  // Cryptify link in the body to fetch and decrypt.
+  if (result.attachmentBase64) {
+    await addBase64AttachmentAsync(item, POSTGUARD_ENCRYPTED_FILENAME, result.attachmentBase64);
+  } else {
+    log(`tier ${result.tier}: skipping local attachment, recipients fetch via uuid=${result.uploadUuid}`);
+  }
+  await setHeadersAsync(item, {
+    [HEADER_ENCRYPTED_RECIPIENTS]: recipientsKey([...to, ...cc]),
+    [HEADER_POSTGUARD]: POSTGUARD_VERSION,
+  });
+  await saveItemAsync(item);
 }
 
 function onMessageSendHandler(event: Office.AddinCommands.Event): void {
@@ -114,20 +446,31 @@ function onMessageSendHandler(event: Office.AddinCommands.Event): void {
         );
         log(`alreadyEncrypted=${alreadyEncrypted} (${attachments.length} attachments)`);
 
-        if (!alreadyEncrypted) {
-          cancelTimeout();
-          block(event, NOT_ENCRYPTED_MESSAGE);
-          return;
-        }
-
-        // Verify the encryption matches the message's current To+Cc list. The
-        // taskpane clears HEADER_ENCRYPTED_RECIPIENTS on policy/sign drift; we
-        // also re-derive the recipient list here so a recipient added behind
-        // the taskpane's back is still caught.
         const [to, cc] = await Promise.all([
           getRecipientsAsync(item.to),
           getRecipientsAsync(item.cc),
         ]);
+
+        if (!alreadyEncrypted) {
+          if (to.length + cc.length === 0) {
+            cancelTimeout();
+            block(event, "Add at least one recipient before sending.");
+            return;
+          }
+
+          try {
+            await encryptAndApply(event, item, to, cc, attachments);
+            cancelTimeout();
+            event.completed({ allowEvent: true });
+          } catch (e) {
+            cancelTimeout();
+            const msg = e instanceof Error ? e.message : String(e);
+            block(event, `Encryption failed: ${msg}`);
+          }
+          return;
+        }
+
+        // Verify the encryption matches the message's current To+Cc list.
         const currentKey = recipientsKey([...to, ...cc]);
         const stale = stampedRecipients === "" || currentKey !== stampedRecipients;
         log(`stamped=${stampedRecipients || "<empty>"} current=${currentKey} stale=${stale}`);

@@ -146,6 +146,19 @@ with `item.addHandlerAsync(Office.EventType.RecipientsChanged, …)`.
 `getAttachmentContentAsync`. Skip them with a defensive check; otherwise the
 async result is a no-op or a failure depending on Outlook version.
 
+### Tenant DLP can scrub attachment bytes while keeping metadata
+
+For attachments whose extension violates a tenant DLP policy (e.g. `.exe`
+on a corporate M365 tenant), `item.attachments` lists the file with its
+real `name` and `size` but `getAttachmentContentAsync` returns
+`format=base64` with `content.length === 0`. The bytes were scrubbed
+client-side before our add-in could read them. There's no client-side
+recovery — the bytes literally don't exist in our context.
+
+Detect this with a `size > 0 && content.length === 0` check and fail
+loudly instead of encrypting nothing. The user typically has to zip /
+rename the offending file to get it past the policy.
+
 ### There is no `sendAsync` for compose
 
 Office.js can save a draft programmatically but cannot send it. This is the

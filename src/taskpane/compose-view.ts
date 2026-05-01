@@ -442,9 +442,6 @@ async function encryptAndPrepareSend(): Promise<void> {
       senderAttributes: state.signAttributes.map((a) => a.v),
     } as never);
 
-    const attBytes = new Uint8Array(await envelope.attachment.arrayBuffer());
-    const attBase64 = toBase64(attBytes);
-
     await setSubject(envelope.subject);
     await setBody(envelope.htmlBody);
 
@@ -458,7 +455,15 @@ async function encryptAndPrepareSend(): Promise<void> {
       }
     }
 
-    const attachmentId = await addBase64Attachment(POSTGUARD_ENCRYPTED_FILENAME, attBase64);
+    // Tier 1/2: include the encrypted bytes locally as postguard.encrypted.
+    // Tier 3: pg-js gave us no attachment (too large) — recipients fetch
+    // via the Cryptify link in the body.
+    let attachmentId: string | null = null;
+    if (envelope.attachment) {
+      const attBytes = new Uint8Array(await envelope.attachment.arrayBuffer());
+      const attBase64 = toBase64(attBytes);
+      attachmentId = await addBase64Attachment(POSTGUARD_ENCRYPTED_FILENAME, attBase64);
+    }
 
     // Force a server-side save before handing back to the user. Without this,
     // clicking Send can race the upload of the (potentially multi-MB) encrypted
