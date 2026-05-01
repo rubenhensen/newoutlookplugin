@@ -214,23 +214,42 @@ function saveItemAsync(item: Office.MessageCompose): Promise<void> {
   });
 }
 
+// Target physical size of the Yivi dialog. Just large enough for the
+// QR widget (~250×280) plus title and Cancel button. We compute a
+// screen-percentage from these at runtime because Office.displayDialog
+// only accepts percentages — picking fixed percentages gives a tiny
+// dialog on ultrawide monitors and an oversized one on laptops.
+const YIVI_DIALOG_TARGET_WIDTH_PX = 380;
+const YIVI_DIALOG_TARGET_HEIGHT_PX = 520;
+
+function pctOfScreen(targetPx: number, screenPx: number): number {
+  // displayDialogAsync clamps to [1, 99]. Round up so we don't drop
+  // below the QR's minimum useful size on huge monitors.
+  const pct = Math.ceil((targetPx / screenPx) * 100);
+  return Math.min(99, Math.max(1, pct));
+}
+
 // Opens the Yivi dialog with an encrypt-request payload and waits for
 // the dialog to post the encrypted result back. Resolves with the
 // envelope; rejects on error or user cancel.
 function runEncryptDialog(payload: DialogMessage): Promise<EncryptResult> {
   return new Promise((resolve, reject) => {
+    // window.screen.* is in CSS pixels (matching what Office's
+    // percentage interprets). Falls back to a safe 1920×1080 if Office's
+    // launchevent runtime ever surfaces an empty screen object.
+    const screenW = window.screen?.width || 1920;
+    const screenH = window.screen?.height || 1080;
+    const widthPct = pctOfScreen(YIVI_DIALOG_TARGET_WIDTH_PX, screenW);
+    const heightPct = pctOfScreen(YIVI_DIALOG_TARGET_HEIGHT_PX, screenH);
+    log(`dialog size: target ${YIVI_DIALOG_TARGET_WIDTH_PX}×${YIVI_DIALOG_TARGET_HEIGHT_PX}px on ${screenW}×${screenH} screen → ${widthPct}%×${heightPct}%`);
+
     Office.context.ui.displayDialogAsync(
       YIVI_DIALOG_URL,
-      // height/width are percentages of the screen (1-99), not pixels.
-      // Sized just large enough for the Yivi QR widget (~250×280) plus
-      // the title and Cancel button. On 1920×1080 that's ~345×485; on a
-      // 1366×768 laptop ~245×345 — tight but the QR still scans.
-      //
       // promptBeforeOpen: false suppresses the "PostGuard is opening
       // another window" confirmation. Honored because the dialog URL is
       // on the same origin as the add-in's source location. Requires
       // Mailbox 1.9 (we require 1.12 in VersionOverridesV1_1).
-      { height: 45, width: 18, displayInIframe: false, promptBeforeOpen: false },
+      { height: heightPct, width: widthPct, displayInIframe: false, promptBeforeOpen: false },
       (asyncResult) => {
         log(`displayDialogAsync status=${asyncResult.status}`);
         if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) {
