@@ -222,6 +222,13 @@ function saveItemAsync(item: Office.MessageCompose): Promise<void> {
 const YIVI_DIALOG_TARGET_WIDTH_PX = 300;
 const YIVI_DIALOG_TARGET_HEIGHT_PX = 520;
 
+// Flip to true to keep the Yivi dialog open after a successful encrypt
+// (and after an encryption error) instead of auto-closing. Useful when
+// debugging the dialog runtime — DevTools, log inspection, chunk
+// reassembly, etc. Errors and the cancel path are unaffected; cancel
+// always closes itself.
+const DEBUG_KEEP_DIALOG_OPEN = false;
+
 function pctOfScreen(targetPx: number, screenPx: number): number {
   // displayDialogAsync clamps to [1, 99]. Round up so we don't drop
   // below the QR's minimum useful size on huge monitors.
@@ -259,11 +266,19 @@ function runEncryptDialog(payload: DialogMessage): Promise<EncryptResult> {
         const dialog = asyncResult.value;
         const inbound = new ChunkAssembler();
         let settled = false;
-        // We deliberately don't dialog.close() here — the dialog manages
-        // its own close lifecycle (Cancel + Close buttons, plus user-X).
-        // Keeping it open after we apply the encrypt result lets the user
-        // read DevTools / the success message at their own pace; the Send
-        // has already been released by event.completed.
+        // Auto-close on success/error so the user isn't left with a
+        // stale "Encrypted and sent. You can close this window." dialog
+        // after the Send has been released — flip DEBUG_KEEP_DIALOG_OPEN
+        // to opt out when DevTools/log inspection is needed. Cancel
+        // closes itself from the dialog (window.close on the button).
+        const closeDialog = (): void => {
+          if (DEBUG_KEEP_DIALOG_OPEN) return;
+          try {
+            dialog.close();
+          } catch (e) {
+            log(`dialog.close failed: ${String(e)}`);
+          }
+        };
         const settle = (cb: () => void): void => {
           if (settled) return;
           settled = true;
@@ -282,12 +297,16 @@ function runEncryptDialog(payload: DialogMessage): Promise<EncryptResult> {
               break;
             }
             case "encrypt-result":
-              settle(() => resolve(body as unknown as EncryptResult));
+              settle(() => {
+                closeDialog();
+                resolve(body as unknown as EncryptResult);
+              });
               break;
             case "encrypt-error":
-              settle(() =>
-                reject(new Error(String(body.message ?? "Encryption failed")))
-              );
+              settle(() => {
+                closeDialog();
+                reject(new Error(String(body.message ?? "Encryption failed")));
+              });
               break;
             case "cancelled":
               settle(() => reject(new Error("Cancelled in dialog")));
