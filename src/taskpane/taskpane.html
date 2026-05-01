@@ -32,22 +32,17 @@
 
         <div id="pg-bcc-warning" class="pg-warning" hidden></div>
 
-        <div class="pg-button-row">
-          <button id="pg-btn-manage" class="pg-btn pg-btn-secondary" type="button"></button>
-          <button id="pg-btn-sign" class="pg-btn pg-btn-secondary" type="button"></button>
+        <div id="pg-manage-section" class="pg-policy-section">
+          <h3 id="pg-manage-title" class="pg-section-title"></h3>
+          <div id="pg-manage-panel"></div>
         </div>
 
-        <button id="pg-btn-encrypt-send" class="pg-btn pg-btn-primary" type="button"></button>
-      </section>
-
-      <!-- Policy editor view (Manage Access / Sign) -->
-      <section id="view-policy-editor" class="pg-view" hidden>
-        <h2 id="pg-policy-title" class="pg-section-title"></h2>
-        <div id="pg-policy-recipients" class="pg-policy-recipients"></div>
-        <div class="pg-button-row pg-button-row-end">
-          <button id="pg-policy-cancel" class="pg-btn pg-btn-secondary" type="button"></button>
-          <button id="pg-policy-save" class="pg-btn pg-btn-primary" type="button"></button>
+        <div id="pg-sign-section" class="pg-policy-section">
+          <h3 id="pg-sign-title" class="pg-section-title"></h3>
+          <div id="pg-sign-panel"></div>
         </div>
+
+        <button id="pg-btn-encrypt-send" class="pg-btn pg-btn-primary" type="button" hidden></button>
       </section>
 
       <!-- Yivi flow view (QR + scan) -->

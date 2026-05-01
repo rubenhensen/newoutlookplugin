@@ -34,7 +34,7 @@ import {
 } from "../lib/pkg-client";
 import { POSTGUARD_ENCRYPTED_FILENAME } from "../lib/mime";
 import { t } from "../lib/i18n";
-import { openPolicyEditor } from "./policy-editor";
+import { mountPolicyPanel } from "./policy-editor";
 import { showView, setStatus, showError } from "./taskpane";
 
 const ADDIN_VERSION = "0.1.0";
@@ -60,12 +60,12 @@ async function persistEncryptOnSend(value: boolean): Promise<void> {
     // saveItem() before and after the header write: the first ensures the
     // draft has an itemId, the second flushes the header change to the
     // server so the OnMessageSend handler sees it.
+    //
+    // Always write an explicit "true" or "false" — if we removed the
+    // header for the off state, a draft the user explicitly toggled off
+    // would reopen as default-on (since "absent" means "no choice yet").
     await saveItem();
-    if (value) {
-      await setItemHeaders({ [HEADER_ENCRYPT_ON_SEND]: "true" });
-    } else {
-      await removeItemHeaders([HEADER_ENCRYPT_ON_SEND]);
-    }
+    await setItemHeaders({ [HEADER_ENCRYPT_ON_SEND]: value ? "true" : "false" });
     await saveItem();
     // eslint-disable-next-line no-console
     console.log(`[pg] persisted encryptOnSend=${value}`);
@@ -123,7 +123,7 @@ interface ComposeState {
 }
 
 const state: ComposeState = {
-  encrypt: false,
+  encrypt: true,
   policy: {},
   signAttributes: [],
   recipients: { to: [], cc: [], bcc: [] },
@@ -151,28 +151,20 @@ export async function mountComposeView(): Promise<void> {
   showView("compose");
 
   const toggle = byId<HTMLInputElement>("pg-toggle-encrypt");
-  const toggleLabel = byId<HTMLElement>("pg-toggle-label");
   const bccWarning = byId<HTMLElement>("pg-bcc-warning");
-  const btnManage = byId<HTMLButtonElement>("pg-btn-manage");
-  const btnSign = byId<HTMLButtonElement>("pg-btn-sign");
+  const manageTitle = byId<HTMLElement>("pg-manage-title");
+  const signTitle = byId<HTMLElement>("pg-sign-title");
   const btnEncryptSend = byId<HTMLButtonElement>("pg-btn-encrypt-send");
 
-  btnManage.textContent = t("manageAccess");
-  btnSign.textContent = t("sign");
+  manageTitle.textContent = t("manageAccess");
+  signTitle.textContent = t("sign");
   btnEncryptSend.textContent = t("encryptAndSend");
 
   toggle.addEventListener("change", () => {
     state.encrypt = toggle.checked;
     void persistEncryptOnSend(state.encrypt);
     renderToggleUI();
-  });
-
-  btnManage.addEventListener("click", () => {
-    void openManageAccess();
-  });
-
-  btnSign.addEventListener("click", () => {
-    void openSign();
+    renderPolicyPanels();
   });
 
   btnEncryptSend.addEventListener("click", () => {
@@ -193,17 +185,32 @@ export async function mountComposeView(): Promise<void> {
     showView("compose");
   });
 
-  // If the user previously toggled encryption on for this draft (e.g. they
-  // hit Send, got soft-blocked, and reopened the taskpane), pick that up.
+  // Restore the toggle state from the per-draft header so a soft-block
+  // round trip or a taskpane reopen doesn't lose the user's choice.
+  // The header has three states:
+  //   "true"  → user explicitly enabled
+  //   "false" → user explicitly disabled
+  //   absent  → never interacted; fall back to the default-on behaviour
+  //             and persist "true" so the OnMessageSend handler sees the
+  //             same intent the toggle visually shows.
   try {
     const headers = await getItemHeaders([HEADER_ENCRYPT_ON_SEND]);
-    state.encrypt = headers[HEADER_ENCRYPT_ON_SEND] === "true";
+    const v = headers[HEADER_ENCRYPT_ON_SEND];
+    if (v === "true") {
+      state.encrypt = true;
+    } else if (v === "false") {
+      state.encrypt = false;
+    } else {
+      state.encrypt = true;
+      void persistEncryptOnSend(true);
+    }
   } catch (_e) {
-    // Ignore — default state.encrypt = false is fine.
+    // Header read failed — leave the default-on state alone.
   }
 
   await refreshRecipients();
   renderToggleUI();
+  renderPolicyPanels();
   bccWarning.hidden = state.recipients.bcc.length === 0 || !state.encrypt;
 
   // Live recipient updates (Mailbox 1.7+). Without this the toggle UI is
@@ -213,15 +220,78 @@ export async function mountComposeView(): Promise<void> {
     void (async () => {
       await refreshRecipients();
       renderToggleUI();
+      // Re-mount the manage panel so newly added/removed recipients show up
+      // (or disappear) without needing a taskpane reopen.
+      renderPolicyPanels();
     })();
+  });
+}
+
+function renderPolicyPanels(): void {
+  const manageSection = byId<HTMLElement>("pg-manage-section");
+  const signSection = byId<HTMLElement>("pg-sign-section");
+  const manageContainer = byId<HTMLElement>("pg-manage-panel");
+  const signContainer = byId<HTMLElement>("pg-sign-panel");
+
+  // When encryption is off, the policies don't apply — collapse both
+  // sections so the compose view stays uncluttered.
+  if (!state.encrypt) {
+    manageSection.hidden = true;
+    signSection.hidden = true;
+    return;
+  }
+  manageSection.hidden = false;
+  signSection.hidden = false;
+
+  const recipients = [...state.recipients.to, ...state.recipients.cc];
+  if (recipients.length === 0) {
+    manageContainer.innerHTML = `<p class="pg-subtitle">${t("composeNoRecipients")}</p>`;
+  } else {
+    mountPolicyPanel(manageContainer, {
+      emails: recipients,
+      initialPolicy: state.policy,
+      onChange: (next) => {
+        state.policy = next;
+        // Ensure email is always populated even if the user managed to clear it.
+        for (const [email, attrs] of Object.entries(state.policy)) {
+          if (!attrs.some((a) => a.t === EMAIL_ATTRIBUTE_TYPE)) {
+            attrs.unshift({ t: EMAIL_ATTRIBUTE_TYPE, v: email });
+          }
+        }
+      },
+    });
+  }
+
+  const senderEmail = getSenderEmail();
+  if (!senderEmail) {
+    signContainer.innerHTML = "";
+    return;
+  }
+  // Sign editor is conceptually a single-recipient policy where the
+  // "recipient" is the sender's own address.
+  const signInitial: Policy = {
+    [senderEmail]: [
+      { t: EMAIL_ATTRIBUTE_TYPE, v: senderEmail },
+      ...state.signAttributes,
+    ],
+  };
+  mountPolicyPanel(signContainer, {
+    emails: [senderEmail],
+    initialPolicy: signInitial,
+    onChange: (next) => {
+      // signAttributes stores ONLY extras. pg.sign.yivi already takes
+      // senderEmail as a top-level field; including email here as well
+      // triggers a second email disclosure on the Yivi QR.
+      state.signAttributes = (next[senderEmail] ?? []).filter(
+        (a) => a.t !== EMAIL_ATTRIBUTE_TYPE
+      );
+    },
   });
 }
 
 function renderToggleUI(): void {
   const toggle = byId<HTMLInputElement>("pg-toggle-encrypt");
   const toggleLabel = byId<HTMLElement>("pg-toggle-label");
-  const btnManage = byId<HTMLButtonElement>("pg-btn-manage");
-  const btnSign = byId<HTMLButtonElement>("pg-btn-sign");
   const btnEncryptSend = byId<HTMLButtonElement>("pg-btn-encrypt-send");
   const bccWarning = byId<HTMLElement>("pg-bcc-warning");
 
@@ -233,9 +303,6 @@ function renderToggleUI(): void {
   const hasRecipients =
     state.recipients.to.length + state.recipients.cc.length > 0;
   const bccPresent = state.recipients.bcc.length > 0;
-
-  btnManage.disabled = !state.encrypt || !hasRecipients;
-  btnSign.disabled = !state.encrypt;
 
   // Re-encrypt mode: after a successful encryption, the button is only
   // useful if recipients/policy/sign attributes have drifted from what's
@@ -294,60 +361,6 @@ async function refreshRecipients(): Promise<void> {
       state.policy[email] = [{ t: EMAIL_ATTRIBUTE_TYPE, v: email }];
     }
   }
-}
-
-async function openManageAccess(): Promise<void> {
-  await refreshRecipients();
-  openPolicyEditor({
-    initialPolicy: state.policy,
-    sign: false,
-    onSave: (next) => {
-      state.policy = next;
-      // Ensure email is always populated even if the user managed to clear it.
-      for (const [email, attrs] of Object.entries(state.policy)) {
-        if (!attrs.some((a) => a.t === EMAIL_ATTRIBUTE_TYPE)) {
-          attrs.unshift({ t: EMAIL_ATTRIBUTE_TYPE, v: email });
-        }
-      }
-      showView("compose");
-      renderToggleUI();
-    },
-    onCancel: () => {
-      showView("compose");
-      renderToggleUI();
-    },
-  });
-}
-
-async function openSign(): Promise<void> {
-  const senderEmail = getSenderEmail();
-  // Sign editor is conceptually a single-recipient policy where the
-  // "recipient" is the sender's own address. The editor expects the email
-  // attribute to be present; we add it back here.
-  const signPolicy: Policy = {
-    [senderEmail]: [
-      { t: EMAIL_ATTRIBUTE_TYPE, v: senderEmail },
-      ...state.signAttributes,
-    ],
-  };
-  openPolicyEditor({
-    initialPolicy: signPolicy,
-    sign: true,
-    onSave: (next) => {
-      // signAttributes stores ONLY extras. pg.sign.yivi already takes
-      // senderEmail as a top-level field; including email here as well
-      // triggers a second email disclosure on the Yivi QR.
-      state.signAttributes = (next[senderEmail] ?? []).filter(
-        (a) => a.t !== EMAIL_ATTRIBUTE_TYPE
-      );
-      showView("compose");
-      renderToggleUI();
-    },
-    onCancel: () => {
-      showView("compose");
-      renderToggleUI();
-    },
-  });
 }
 
 async function encryptAndPrepareSend(): Promise<void> {

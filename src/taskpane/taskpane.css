@@ -159,6 +159,10 @@ body {
   transition: background 0.15s, border-color 0.15s;
 }
 
+.pg-btn[hidden] {
+  display: none;
+}
+
 .pg-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -233,6 +237,14 @@ body {
 }
 
 /* Policy editor */
+
+.pg-policy-section {
+  margin-bottom: 16px;
+}
+
+.pg-policy-section[hidden] {
+  display: none;
+}
 
 .pg-policy-recipients {
   display: flex;

@@ -1,5 +1,7 @@
 // Inline policy editor used both for "Manage Access" (recipient policies)
-// and "Sign" (sender attribute selection). Renders into #view-policy-editor.
+// and "Sign" (sender attribute selection). Mounts directly into a host
+// container in the compose view — no Save/Cancel; onChange fires after every
+// mutation.
 //
 // UI pattern mirrors postguard-website's RecipientSelectionFields: the email
 // is locked at the top, selected attributes are rendered as input rows with
@@ -13,64 +15,68 @@ import {
 } from "../lib/attributes";
 import { Policy, AttributeRequest } from "../lib/types";
 import { t } from "../lib/i18n";
-import { showView } from "./taskpane";
 
-interface PolicyEditorOptions {
+interface PolicyPanelOptions {
+  emails: string[];
   initialPolicy: Policy;
-  sign: boolean;
-  onSave: (next: Policy) => void;
-  onCancel: () => void;
+  onChange: (next: Policy) => void;
 }
 
-// Working state for the currently open editor session. Email is implicit
-// (always emitted on save), so this map holds the *extra* attributes only.
-let workingPolicy = new Map<string, AttributeRequest[]>();
-
-export function openPolicyEditor(opts: PolicyEditorOptions): void {
-  const titleEl = document.getElementById("pg-policy-title")!;
-  const recipientsEl = document.getElementById("pg-policy-recipients")!;
-  const saveBtn = document.getElementById("pg-policy-save") as HTMLButtonElement;
-  const cancelBtn = document.getElementById("pg-policy-cancel") as HTMLButtonElement;
-
-  titleEl.textContent = opts.sign ? t("policyEditorTitleSign") : t("policyEditorTitle");
-  saveBtn.textContent = t("policyEditorSave");
-  cancelBtn.textContent = t("policyEditorCancel");
-
-  workingPolicy = new Map();
-  for (const [email, attrs] of Object.entries(opts.initialPolicy)) {
+export function mountPolicyPanel(
+  container: HTMLElement,
+  opts: PolicyPanelOptions
+): void {
+  // Working state for this panel — extras only (email is implicit).
+  const working = new Map<string, AttributeRequest[]>();
+  for (const email of opts.emails) {
+    const attrs = opts.initialPolicy[email] ?? [];
     const extras = attrs
       .filter((a) => a.t !== EMAIL_ATTRIBUTE_TYPE)
       .map((a) => ({ t: a.t, v: a.v }));
-    workingPolicy.set(email, extras);
+    working.set(email, extras);
   }
 
-  recipientsEl.innerHTML = "";
-  for (const email of workingPolicy.keys()) {
-    recipientsEl.appendChild(renderRecipient(email));
+  const fireChange = () => {
+    const result: Policy = {};
+    for (const [email, extras] of working.entries()) {
+      const valid = extras
+        .map((a) => ({ t: a.t, v: a.v.trim() }))
+        .filter((a) => a.v.length > 0);
+      result[email] = [{ t: EMAIL_ATTRIBUTE_TYPE, v: email }, ...valid];
+    }
+    opts.onChange(result);
+  };
+
+  container.innerHTML = "";
+  if (working.size === 0) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "pg-policy-recipients";
+  for (const email of working.keys()) {
+    wrapper.appendChild(renderRecipient(working, email, fireChange));
   }
-
-  // Replace listeners by cloning the buttons (cheap way to drop prior bindings).
-  const saveClone = saveBtn.cloneNode(true) as HTMLButtonElement;
-  saveBtn.replaceWith(saveClone);
-  saveClone.addEventListener("click", () => opts.onSave(collect()));
-
-  const cancelClone = cancelBtn.cloneNode(true) as HTMLButtonElement;
-  cancelBtn.replaceWith(cancelClone);
-  cancelClone.addEventListener("click", () => opts.onCancel());
-
-  showView("policy_editor");
+  container.appendChild(wrapper);
 }
 
-function renderRecipient(email: string): HTMLElement {
+function renderRecipient(
+  working: Map<string, AttributeRequest[]>,
+  email: string,
+  fireChange: () => void
+): HTMLElement {
   const section = document.createElement("div");
   section.className = "pg-policy-recipient";
   section.dataset.email = email;
-  rerenderRecipient(section, email);
+  rerenderRecipient(working, section, email, fireChange);
   return section;
 }
 
-function rerenderRecipient(section: HTMLElement, email: string): void {
-  const extras = workingPolicy.get(email)!;
+function rerenderRecipient(
+  working: Map<string, AttributeRequest[]>,
+  section: HTMLElement,
+  email: string,
+  fireChange: () => void
+): void {
+  const extras = working.get(email)!;
   section.innerHTML = "";
 
   const heading = document.createElement("div");
@@ -82,7 +88,10 @@ function rerenderRecipient(section: HTMLElement, email: string): void {
     const desc = SUPPORTED_ATTRIBUTES.find((d) => d.type === extras[i].t);
     if (!desc) continue;
     section.appendChild(
-      renderAttrRow(extras, i, desc, () => rerenderRecipient(section, email))
+      renderAttrRow(extras, i, desc, () => {
+        rerenderRecipient(working, section, email, fireChange);
+        fireChange();
+      }, fireChange)
     );
   }
 
@@ -99,7 +108,8 @@ function rerenderRecipient(section: HTMLElement, email: string): void {
       btn.textContent = `+ ${t(desc.type, desc.defaultLabel)}`;
       btn.addEventListener("click", () => {
         extras.push({ t: desc.type, v: "" });
-        rerenderRecipient(section, email);
+        rerenderRecipient(working, section, email, fireChange);
+        fireChange();
       });
       addRow.appendChild(btn);
     }
@@ -111,7 +121,8 @@ function renderAttrRow(
   extras: AttributeRequest[],
   index: number,
   desc: AttributeDescriptor,
-  onDelete: () => void
+  onDelete: () => void,
+  fireChange: () => void
 ): HTMLElement {
   const attr = extras[index];
 
@@ -135,6 +146,7 @@ function renderAttrRow(
     input.value = ddmmyyyyToHtml(attr.v);
     input.addEventListener("input", () => {
       attr.v = htmlToDdmmyyyy(input.value);
+      fireChange();
     });
   } else if (desc.type === "pbdf.sidn-pbdf.mobilenumber.mobilenumber") {
     // Yivi stores numbers in E.164. We don't have libphonenumber here yet so
@@ -145,12 +157,14 @@ function renderAttrRow(
     input.value = attr.v;
     input.addEventListener("input", () => {
       attr.v = input.value;
+      fireChange();
     });
   } else {
     input.type = "text";
     input.value = attr.v;
     input.addEventListener("input", () => {
       attr.v = input.value;
+      fireChange();
     });
   }
 
@@ -169,17 +183,6 @@ function renderAttrRow(
 
   row.appendChild(inputRow);
   return row;
-}
-
-function collect(): Policy {
-  const result: Policy = {};
-  for (const [email, extras] of workingPolicy.entries()) {
-    const valid = extras
-      .map((a) => ({ t: a.t, v: a.v.trim() }))
-      .filter((a) => a.v.length > 0);
-    result[email] = [{ t: EMAIL_ATTRIBUTE_TYPE, v: email }, ...valid];
-  }
-  return result;
 }
 
 function ddmmyyyyToHtml(ddmmyyyy: string): string {

@@ -14,7 +14,6 @@ const views = {
   read_was_encrypted: byId("view-read-was-encrypted"),
   read_noop: byId("view-read-noop"),
   decrypted: byId("view-decrypted"),
-  policy_editor: byId("view-policy-editor"),
   yivi: byId("view-yivi"),
   error: byId("view-error"),
 };
