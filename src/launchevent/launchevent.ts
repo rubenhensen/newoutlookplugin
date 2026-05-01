@@ -222,16 +222,15 @@ function runEncryptDialog(payload: DialogMessage): Promise<EncryptResult> {
     Office.context.ui.displayDialogAsync(
       YIVI_DIALOG_URL,
       // height/width are percentages of the screen (1-99), not pixels.
-      // Sized for the Yivi QR widget plus title/Cancel button — roughly
-      // 1/4 width × 2/3 height of the screen so the QR fits comfortably
-      // without dominating the display. On 1920×1080 that's ~480×720; on
-      // a 1366×768 laptop ~340×510.
+      // Sized just large enough for the Yivi QR widget (~250×280) plus
+      // the title and Cancel button. On 1920×1080 that's ~345×485; on a
+      // 1366×768 laptop ~245×345 — tight but the QR still scans.
       //
       // promptBeforeOpen: false suppresses the "PostGuard is opening
       // another window" confirmation. Honored because the dialog URL is
       // on the same origin as the add-in's source location. Requires
       // Mailbox 1.9 (we require 1.12 in VersionOverridesV1_1).
-      { height: 67, width: 25, displayInIframe: false, promptBeforeOpen: false },
+      { height: 45, width: 18, displayInIframe: false, promptBeforeOpen: false },
       (asyncResult) => {
         log(`displayDialogAsync status=${asyncResult.status}`);
         if (asyncResult.status !== Office.AsyncResultStatus.Succeeded) {
