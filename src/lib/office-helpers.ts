@@ -89,6 +89,37 @@ export function addBase64Attachment(filename: string, base64: string): Promise<s
   );
 }
 
+// Commits the current draft (subject, body, attachments) to the server. We need
+// this after writing the encrypted body + attachment because Send otherwise races
+// the server-side upload of those changes; new Outlook on Windows shows a Smart
+// Alerts-style "PostGuard timed out" dialog when that race occurs.
+export function saveItem(): Promise<string> {
+  const item = getItem() as Office.MessageCompose;
+  return p<string>((cb) => item.saveAsync(cb));
+}
+
+// Internet header storage. Used to share state (e.g. the encrypt toggle)
+// between the taskpane and the OnMessageSend launch event handler, which
+// runs in a separate runtime. customProperties does not propagate cross-
+// runtime in new Outlook (OWA-based), but internet headers are persisted
+// onto the message itself so they're guaranteed visible on send.
+//
+// Custom internet header names must start with "x-" per Office.js.
+export function setItemHeaders(headers: Record<string, string>): Promise<void> {
+  const item = getItem() as Office.MessageCompose;
+  return p<void>((cb) => item.internetHeaders.setAsync(headers, cb));
+}
+
+export function removeItemHeaders(names: string[]): Promise<void> {
+  const item = getItem() as Office.MessageCompose;
+  return p<void>((cb) => item.internetHeaders.removeAsync(names, cb));
+}
+
+export function getItemHeaders(names: string[]): Promise<Record<string, string>> {
+  const item = getItem() as Office.MessageCompose;
+  return p<Record<string, string>>((cb) => item.internetHeaders.getAsync(names, cb));
+}
+
 // --- Read mode getters ---
 
 export function getReadAttachments(): Office.AttachmentDetails[] {

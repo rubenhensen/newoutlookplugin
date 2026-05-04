@@ -1,111 +1,198 @@
 // Inline policy editor used both for "Manage Access" (recipient policies)
-// and "Sign" (sender attribute selection). Renders into #view-policy-editor.
+// and "Sign" (sender attribute selection). Mounts directly into a host
+// container in the compose view — no Save/Cancel; onChange fires after every
+// mutation.
+//
+// UI pattern mirrors postguard-website's RecipientSelectionFields: the email
+// is locked at the top, selected attributes are rendered as input rows with
+// a × delete button, and unselected attributes are shown as "+" chips that
+// add a fresh row when clicked.
 
-import { EMAIL_ATTRIBUTE_TYPE, SUPPORTED_ATTRIBUTES } from "../lib/attributes";
+import {
+  AttributeDescriptor,
+  EMAIL_ATTRIBUTE_TYPE,
+  SUPPORTED_ATTRIBUTES,
+} from "../lib/attributes";
 import { Policy, AttributeRequest } from "../lib/types";
 import { t } from "../lib/i18n";
-import { showView } from "./taskpane";
 
-interface PolicyEditorOptions {
+interface PolicyPanelOptions {
+  emails: string[];
   initialPolicy: Policy;
-  sign: boolean;
-  onSave: (next: Policy) => void;
-  onCancel: () => void;
+  onChange: (next: Policy) => void;
 }
 
-export function openPolicyEditor(opts: PolicyEditorOptions): void {
-  const titleEl = document.getElementById("pg-policy-title")!;
-  const recipientsEl = document.getElementById("pg-policy-recipients")!;
-  const saveBtn = document.getElementById("pg-policy-save") as HTMLButtonElement;
-  const cancelBtn = document.getElementById("pg-policy-cancel") as HTMLButtonElement;
-
-  titleEl.textContent = opts.sign ? t("policyEditorTitleSign") : t("policyEditorTitle");
-  saveBtn.textContent = t("policyEditorSave");
-  cancelBtn.textContent = t("policyEditorCancel");
-
-  recipientsEl.innerHTML = "";
-
-  for (const [email, attrs] of Object.entries(opts.initialPolicy)) {
-    recipientsEl.appendChild(renderRecipient(email, attrs));
+export function mountPolicyPanel(
+  container: HTMLElement,
+  opts: PolicyPanelOptions
+): void {
+  // Working state for this panel — extras only (email is implicit).
+  const working = new Map<string, AttributeRequest[]>();
+  for (const email of opts.emails) {
+    const attrs = opts.initialPolicy[email] ?? [];
+    const extras = attrs
+      .filter((a) => a.t !== EMAIL_ATTRIBUTE_TYPE)
+      .map((a) => ({ t: a.t, v: a.v }));
+    working.set(email, extras);
   }
 
-  // Replace listeners by cloning the button (cheap way to drop prior bindings).
-  const saveClone = saveBtn.cloneNode(true) as HTMLButtonElement;
-  saveBtn.replaceWith(saveClone);
-  saveClone.addEventListener("click", () => {
-    const next = collect(recipientsEl);
-    opts.onSave(next);
-  });
+  const fireChange = () => {
+    const result: Policy = {};
+    for (const [email, extras] of working.entries()) {
+      const valid = extras
+        .map((a) => ({ t: a.t, v: a.v.trim() }))
+        .filter((a) => a.v.length > 0);
+      result[email] = [{ t: EMAIL_ATTRIBUTE_TYPE, v: email }, ...valid];
+    }
+    opts.onChange(result);
+  };
 
-  const cancelClone = cancelBtn.cloneNode(true) as HTMLButtonElement;
-  cancelBtn.replaceWith(cancelClone);
-  cancelClone.addEventListener("click", () => opts.onCancel());
+  container.innerHTML = "";
+  if (working.size === 0) return;
 
-  showView("policy_editor");
+  const wrapper = document.createElement("div");
+  wrapper.className = "pg-policy-recipients";
+  for (const email of working.keys()) {
+    wrapper.appendChild(renderRecipient(working, email, fireChange));
+  }
+  container.appendChild(wrapper);
 }
 
-function renderRecipient(email: string, attrs: AttributeRequest[]): HTMLElement {
+function renderRecipient(
+  working: Map<string, AttributeRequest[]>,
+  email: string,
+  fireChange: () => void
+): HTMLElement {
   const section = document.createElement("div");
   section.className = "pg-policy-recipient";
   section.dataset.email = email;
-
-  const label = document.createElement("div");
-  label.className = "pg-policy-recipient-email";
-  label.textContent = email;
-  section.appendChild(label);
-
-  for (const desc of SUPPORTED_ATTRIBUTES) {
-    const isLocked = desc.type === EMAIL_ATTRIBUTE_TYPE;
-    const existing = attrs.find((a) => a.t === desc.type);
-    const isChecked = isLocked || !!existing;
-
-    const row = document.createElement("div");
-    row.className = "pg-policy-attr" + (isLocked ? " locked" : "");
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = isChecked;
-    checkbox.dataset.attrType = desc.type;
-    checkbox.disabled = isLocked;
-
-    const labelEl = document.createElement("label");
-    labelEl.textContent = t(desc.type, desc.defaultLabel);
-
-    const value = document.createElement("input");
-    value.type = "text";
-    value.placeholder = t(desc.type, desc.defaultLabel);
-    value.value = isLocked ? email : existing?.v ?? "";
-    value.dataset.attrType = desc.type;
-    value.readOnly = isLocked;
-
-    row.appendChild(checkbox);
-    row.appendChild(labelEl);
-    row.appendChild(value);
-    section.appendChild(row);
-  }
-
+  rerenderRecipient(working, section, email, fireChange);
   return section;
 }
 
-function collect(container: HTMLElement): Policy {
-  const result: Policy = {};
-  const sections = container.querySelectorAll<HTMLElement>(".pg-policy-recipient");
-  for (const section of Array.from(sections)) {
-    const email = section.dataset.email!;
-    const attrs: AttributeRequest[] = [];
-    const checkboxes = section.querySelectorAll<HTMLInputElement>(
-      'input[type="checkbox"]:checked'
+function rerenderRecipient(
+  working: Map<string, AttributeRequest[]>,
+  section: HTMLElement,
+  email: string,
+  fireChange: () => void
+): void {
+  const extras = working.get(email)!;
+  section.innerHTML = "";
+
+  const heading = document.createElement("div");
+  heading.className = "pg-policy-recipient-email";
+  heading.textContent = email;
+  section.appendChild(heading);
+
+  for (let i = 0; i < extras.length; i++) {
+    const desc = SUPPORTED_ATTRIBUTES.find((d) => d.type === extras[i].t);
+    if (!desc) continue;
+    section.appendChild(
+      renderAttrRow(extras, i, desc, () => {
+        rerenderRecipient(working, section, email, fireChange);
+        fireChange();
+      }, fireChange)
     );
-    for (const cb of Array.from(checkboxes)) {
-      const type = cb.dataset.attrType!;
-      const valueInput = section.querySelector<HTMLInputElement>(
-        `input[type="text"][data-attr-type="${type}"]`
-      );
-      const v = (valueInput?.value ?? "").trim();
-      if (!v && type !== EMAIL_ATTRIBUTE_TYPE) continue;
-      attrs.push({ t: type, v });
-    }
-    result[email] = attrs;
   }
-  return result;
+
+  const addable = SUPPORTED_ATTRIBUTES.filter(
+    (d) => d.type !== EMAIL_ATTRIBUTE_TYPE && !extras.some((e) => e.t === d.type)
+  );
+  if (addable.length > 0) {
+    const addRow = document.createElement("div");
+    addRow.className = "pg-policy-add-row";
+    for (const desc of addable) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "pg-policy-add-chip";
+      btn.textContent = `+ ${t(desc.type, desc.defaultLabel)}`;
+      btn.addEventListener("click", () => {
+        extras.push({ t: desc.type, v: "" });
+        rerenderRecipient(working, section, email, fireChange);
+        fireChange();
+      });
+      addRow.appendChild(btn);
+    }
+    section.appendChild(addRow);
+  }
+}
+
+function renderAttrRow(
+  extras: AttributeRequest[],
+  index: number,
+  desc: AttributeDescriptor,
+  onDelete: () => void,
+  fireChange: () => void
+): HTMLElement {
+  const attr = extras[index];
+
+  const row = document.createElement("div");
+  row.className = "pg-policy-attr";
+
+  const label = document.createElement("label");
+  label.textContent = t(desc.type, desc.defaultLabel);
+  row.appendChild(label);
+
+  const inputRow = document.createElement("div");
+  inputRow.className = "pg-policy-attr-input";
+
+  const input = document.createElement("input");
+
+  if (desc.type === "pbdf.gemeente.personalData.dateofbirth") {
+    // Yivi stores DOB as DD-MM-YYYY but <input type="date"> uses YYYY-MM-DD.
+    // Round-trip through helpers so the IBE identity at encrypt matches what
+    // Yivi discloses at decrypt.
+    input.type = "date";
+    input.value = ddmmyyyyToHtml(attr.v);
+    input.addEventListener("input", () => {
+      attr.v = htmlToDdmmyyyy(input.value);
+      fireChange();
+    });
+  } else if (desc.type === "pbdf.sidn-pbdf.mobilenumber.mobilenumber") {
+    // Yivi stores numbers in E.164. We don't have libphonenumber here yet so
+    // we accept whatever the user types; mismatched-format identities will
+    // simply fail at decrypt — better than silently rewriting input.
+    input.type = "tel";
+    input.placeholder = "+31612345678";
+    input.value = attr.v;
+    input.addEventListener("input", () => {
+      attr.v = input.value;
+      fireChange();
+    });
+  } else {
+    input.type = "text";
+    input.value = attr.v;
+    input.addEventListener("input", () => {
+      attr.v = input.value;
+      fireChange();
+    });
+  }
+
+  inputRow.appendChild(input);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "pg-policy-attr-delete";
+  deleteBtn.setAttribute("aria-label", `Remove ${desc.defaultLabel}`);
+  deleteBtn.textContent = "×";
+  deleteBtn.addEventListener("click", () => {
+    extras.splice(index, 1);
+    onDelete();
+  });
+  inputRow.appendChild(deleteBtn);
+
+  row.appendChild(inputRow);
+  return row;
+}
+
+function ddmmyyyyToHtml(ddmmyyyy: string): string {
+  if (!ddmmyyyy) return "";
+  const p = ddmmyyyy.split("-");
+  return p.length === 3 ? `${p[2]}-${p[1]}-${p[0]}` : "";
+}
+
+function htmlToDdmmyyyy(yyyymmdd: string): string {
+  if (!yyyymmdd) return "";
+  const p = yyyymmdd.split("-");
+  return p.length === 3 ? `${p[2]}-${p[1]}-${p[0]}` : "";
 }

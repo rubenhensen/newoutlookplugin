@@ -21,6 +21,12 @@
   --pg-spacing: 12px;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
 body {
   margin: 0;
@@ -37,25 +43,6 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-
-.pg-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  background: var(--pg-accent);
-  color: var(--pg-accent-fg);
-}
-
-.pg-logo {
-  width: 24px;
-  height: 24px;
-}
-
-.pg-title {
-  font-weight: 600;
-  font-size: 15px;
 }
 
 .pg-status {
@@ -83,6 +70,10 @@ body {
 
 .pg-view {
   display: block;
+}
+
+.pg-view[hidden] {
+  display: none;
 }
 
 .pg-section-title {
@@ -168,6 +159,10 @@ body {
   transition: background 0.15s, border-color 0.15s;
 }
 
+.pg-btn[hidden] {
+  display: none;
+}
+
 .pg-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -243,6 +238,14 @@ body {
 
 /* Policy editor */
 
+.pg-policy-section {
+  margin-bottom: 16px;
+}
+
+.pg-policy-section[hidden] {
+  display: none;
+}
+
 .pg-policy-recipients {
   display: flex;
   flex-direction: column;
@@ -253,36 +256,87 @@ body {
 .pg-policy-recipient {
   border: 1px solid var(--pg-border);
   border-radius: var(--pg-radius);
-  padding: 10px 12px;
+  padding: 12px;
+  background: var(--pg-secondary-bg);
 }
 
 .pg-policy-recipient-email {
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
 }
 
 .pg-policy-attr {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-
-.pg-policy-attr.locked {
-  opacity: 0.85;
+  margin-bottom: 10px;
 }
 
 .pg-policy-attr label {
-  flex: 0 0 110px;
-  font-size: 13px;
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pg-muted);
+  margin-bottom: 4px;
 }
 
-.pg-policy-attr input[type="text"] {
+.pg-policy-attr-input {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.pg-policy-attr-input input {
   flex: 1;
-  padding: 4px 6px;
+  min-width: 0;
+  padding: 6px 8px;
   border: 1px solid var(--pg-border);
   border-radius: 4px;
   font-size: 13px;
+  font-family: inherit;
+  background: white;
+}
+
+.pg-policy-attr-delete {
+  width: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--pg-border);
+  border-radius: 4px;
+  background: white;
+  color: var(--pg-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+}
+
+.pg-policy-attr-delete:hover {
+  background: var(--pg-error-bg);
+  color: var(--pg-error-fg);
+  border-color: var(--pg-error-fg);
+}
+
+.pg-policy-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.pg-policy-add-chip {
+  padding: 4px 12px;
+  border: 1px dashed var(--pg-border);
+  border-radius: 999px;
+  background: white;
+  color: var(--pg-accent);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.pg-policy-add-chip:hover {
+  background: var(--pg-info-bg);
+  border-color: var(--pg-accent);
+  border-style: solid;
 }
 
 /* Yivi host - the SDK injects the QR widget here */
@@ -330,6 +384,34 @@ body {
   border-radius: var(--pg-radius);
   min-height: 400px;
   background: white;
+}
+
+.pg-decrypted-attachments {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--pg-secondary-bg);
+  border-radius: var(--pg-radius);
+}
+
+.pg-attachment-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.pg-attachment-list li {
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.pg-attachment-link {
+  color: var(--pg-accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.pg-attachment-link:hover {
+  text-decoration: underline;
 }
 
 /* Spinner */

@@ -17,6 +17,7 @@ const en: Bundle = {
   manageAccess: "Manage Access",
   sign: "Sign",
   encryptAndSend: "Encrypt & Send",
+  reencryptAndSend: "Re-encrypt & Send",
   encrypting: "Encrypting…",
 
   composeBccWarning: "PostGuard does not support BCC. Either remove BCC or disable PostGuard.",
@@ -63,8 +64,6 @@ const en: Bundle = {
   "pbdf.sidn-pbdf.mobilenumber.mobilenumber": "Mobile number",
   "pbdf.gemeente.personalData.surname": "Surname",
   "pbdf.gemeente.personalData.dateofbirth": "Date of birth",
-  "pbdf.nuts.agb.agbcode": "AGB code",
-  "pbdf.pbdf.surfnet-2.id": "Surf EduID",
 };
 
 const bundles: Record<string, Bundle> = { en };

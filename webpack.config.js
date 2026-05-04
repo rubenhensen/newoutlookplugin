@@ -33,6 +33,8 @@ module.exports = async (env, options) => {
       polyfill: ["core-js/stable", "regenerator-runtime/runtime"],
       taskpane: ["./src/taskpane/taskpane.ts", "./src/taskpane/taskpane.html"],
       commands: "./src/commands/commands.ts",
+      launchevent: "./src/launchevent/launchevent.ts",
+      "yivi-dialog": ["./src/yivi-dialog/yivi-dialog.ts", "./src/yivi-dialog/yivi-dialog.html"],
     },
     output: {
       clean: true,
@@ -83,6 +85,16 @@ module.exports = async (env, options) => {
         filename: "commands.html",
         template: "./src/commands/commands.html",
         chunks: ["polyfill", "commands"],
+      }),
+      new HtmlWebpackPlugin({
+        filename: "launchevent.html",
+        template: "./src/launchevent/launchevent.html",
+        chunks: ["launchevent"],
+      }),
+      new HtmlWebpackPlugin({
+        filename: "yivi-dialog.html",
+        template: "./src/yivi-dialog/yivi-dialog.html",
+        chunks: ["polyfill", "yivi-dialog"],
       }),
       new CopyWebpackPlugin({
         patterns: [

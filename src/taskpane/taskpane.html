@@ -12,11 +12,6 @@
     <link href="taskpane.css" rel="stylesheet" type="text/css" />
   </head>
   <body class="pg-app">
-    <header class="pg-header">
-      <img class="pg-logo" src="../../assets/icon-32.png" alt="" />
-      <div class="pg-title">PostGuard</div>
-    </header>
-
     <div id="pg-status" class="pg-status pg-status-hidden" role="status"></div>
 
     <main class="pg-main">
@@ -37,22 +32,17 @@
 
         <div id="pg-bcc-warning" class="pg-warning" hidden></div>
 
-        <div class="pg-button-row">
-          <button id="pg-btn-manage" class="pg-btn pg-btn-secondary" type="button"></button>
-          <button id="pg-btn-sign" class="pg-btn pg-btn-secondary" type="button"></button>
+        <div id="pg-manage-section" class="pg-policy-section">
+          <h3 id="pg-manage-title" class="pg-section-title"></h3>
+          <div id="pg-manage-panel"></div>
         </div>
 
-        <button id="pg-btn-encrypt-send" class="pg-btn pg-btn-primary" type="button"></button>
-      </section>
-
-      <!-- Policy editor view (Manage Access / Sign) -->
-      <section id="view-policy-editor" class="pg-view" hidden>
-        <h2 id="pg-policy-title" class="pg-section-title"></h2>
-        <div id="pg-policy-recipients" class="pg-policy-recipients"></div>
-        <div class="pg-button-row pg-button-row-end">
-          <button id="pg-policy-cancel" class="pg-btn pg-btn-secondary" type="button"></button>
-          <button id="pg-policy-save" class="pg-btn pg-btn-primary" type="button"></button>
+        <div id="pg-sign-section" class="pg-policy-section">
+          <h3 id="pg-sign-title" class="pg-section-title"></h3>
+          <div id="pg-sign-panel"></div>
         </div>
+
+        <button id="pg-btn-encrypt-send" class="pg-btn pg-btn-primary" type="button" hidden></button>
       </section>
 
       <!-- Yivi flow view (QR + scan) -->
@@ -60,6 +50,9 @@
         <h2 id="pg-yivi-title" class="pg-section-title"></h2>
         <p id="pg-yivi-subtitle" class="pg-subtitle"></p>
         <div id="yivi-web-form" class="pg-yivi-host"></div>
+        <div class="pg-button-row pg-button-row-end">
+          <button id="pg-btn-yivi-cancel" class="pg-btn pg-btn-secondary" type="button">Cancel</button>
+        </div>
       </section>
 
       <!-- Read-mode encrypted detection -->
@@ -86,6 +79,7 @@
           sandbox="allow-same-origin"
           referrerpolicy="no-referrer"
         ></iframe>
+        <div id="pg-decrypted-attachments" class="pg-decrypted-attachments" hidden></div>
       </section>
 
       <!-- Not-applicable (read mode but no PostGuard content) -->
