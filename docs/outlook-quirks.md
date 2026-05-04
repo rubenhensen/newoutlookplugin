@@ -276,6 +276,16 @@ during compose / read rendering. They're CSP-blocked or 404, none of them are
 from our add-in, and they're safe to ignore when triaging real issues in the
 console.
 
+### `XML-parsefout: geen hoofdelement gevonden` on `taskpane.html?et=` is OWA noise
+
+When an add-in declares an `OnMessageSend` LaunchEvent, OWA probes the taskpane
+URL with an empty `?et=` query string (`https://localhost:3000/taskpane.html?et=`)
+and runs the response through an XML parser. HTML isn't valid XML so Firefox
+logs `XML-parsefout: geen hoofdelement gevonden` ("XML parse error: no root
+element found") to the console. The parse failure is internal to OWA's probe
+logic — the actual taskpane mount uses the response normally and your `Office.onReady`
+code runs fine after this error. Safe to ignore.
+
 ---
 
 ## Things we still don't fully understand
